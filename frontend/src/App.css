@@ -1,0 +1,230 @@
+/* ── Reset & Base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: #f0f2f5;
+  color: #1a1a2e;
+  min-height: 100vh;
+}
+
+/* ── Header ── */
+.app-header {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+  color: white;
+  padding: 28px 40px 0;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.header-content {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.app-header h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 4px;
+}
+
+.header-subtitle {
+  font-size: 13px;
+  color: rgba(255,255,255,0.55);
+  font-weight: 400;
+  margin-bottom: 20px;
+}
+
+/* ── Nav ── */
+.nav-links {
+  display: flex;
+  gap: 4px;
+}
+
+.nav-link {
+  display: inline-block;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.6);
+  text-decoration: none;
+  border-radius: 8px 8px 0 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.nav-link:hover {
+  color: white;
+  background: rgba(255,255,255,0.08);
+}
+
+.nav-link.active {
+  color: white;
+  background: rgba(255,255,255,0.14);
+  border-bottom: 3px solid #e94560;
+}
+
+/* ── Main ── */
+.app-main {
+  max-width: 1200px;
+  margin: 32px auto;
+  padding: 0 24px;
+}
+
+/* ── Section cards ── */
+.section-card {
+  background: white;
+  border-radius: 16px;
+  padding: 28px 32px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+}
+
+.section-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin-bottom: 4px;
+}
+
+.section-subtitle {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 24px;
+}
+
+/* ── Stat Cards ── */
+.stat-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.stat-card {
+  border-radius: 12px;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stat-card.green {
+  background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
+  border: 1px solid #c8e6c9;
+}
+
+.stat-card.red {
+  background: linear-gradient(135deg, #fce4ec, #fef9f9);
+  border: 1px solid #f8bbd0;
+}
+
+.stat-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #666;
+}
+
+.stat-amount {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.stat-card.green .stat-amount { color: #2e7d32; }
+.stat-card.red  .stat-amount { color: #c62828; }
+
+.stat-arrow {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.stat-card.green .stat-arrow { color: #43a047; }
+.stat-card.red  .stat-arrow { color: #e53935; }
+
+/* ── Table ── */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  margin-top: 28px;
+}
+
+.data-table thead tr {
+  background: #f5f7fa;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 11px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #888;
+  border-bottom: 2px solid #e8eaed;
+}
+
+.data-table th:not(:first-child) { text-align: right; }
+
+.data-table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  color: #333;
+}
+
+.data-table td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+
+.data-table tbody tr:hover { background: #fafbff; }
+
+.data-table tbody tr:last-child td { border-bottom: none; }
+
+.net-positive { color: #2e7d32; font-weight: 600; }
+.net-negative { color: #c62828; font-weight: 600; }
+.net-zero     { color: #888;    font-weight: 600; }
+
+/* ── Loading / Error states ── */
+.state-box {
+  text-align: center;
+  padding: 64px 32px;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+  color: #555;
+}
+
+.state-box p { margin-top: 12px; font-size: 15px; }
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e0e0e0;
+  border-top-color: #0f3460;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.state-box.error { border: 1px solid #ffd0d0; }
+.error-icon { font-size: 36px; }
+.error-detail { font-size: 13px; color: #e53935; margin-top: 4px; }
+.error-hint  { font-size: 12px; color: #aaa; margin-top: 8px; }
+
+/* ── Footer ── */
+.app-footer {
+  text-align: center;
+  padding: 24px;
+  font-size: 12px;
+  color: #bbb;
+}
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .app-header { padding: 20px 16px 0; }
+  .app-main   { padding: 0 16px; }
+  .section-card { padding: 20px 16px; }
+  .stat-cards { grid-template-columns: 1fr; }
+  .app-header h1 { font-size: 20px; }
+  .nav-link { padding: 8px 14px; font-size: 12px; }
+}
