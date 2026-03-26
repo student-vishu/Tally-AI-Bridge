@@ -1,4 +1,4 @@
-exports.buildCostCategorySummaryXML = () => `
+exports.buildCashFlowXML = () => `
 <ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Export Data</TALLYREQUEST>
@@ -6,7 +6,7 @@ exports.buildCostCategorySummaryXML = () => `
   <BODY>
     <EXPORTDATA>
       <REQUESTDESC>
-        <REPORTNAME>Cost Category Summary</REPORTNAME>
+        <REPORTNAME>Cash Flow</REPORTNAME>
         <STATICVARIABLES>
           <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
         </STATICVARIABLES>

@@ -20,3 +20,12 @@ exports.parseXML = (xml) => {
 exports.parseCostCategorySummaryXML = (xml) => {
     return ccSummaryParser.parse(xml);
 };
+
+const cashFlowParser = new XMLParser({
+    ignoreAttributes: false,
+    isArray: (name) => ['DSPACCINFO'].includes(name)
+});
+
+exports.parseCashFlowXML = (xml) => {
+    return cashFlowParser.parse(xml);
+};

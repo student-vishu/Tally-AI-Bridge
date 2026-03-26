@@ -1,3 +1,16 @@
+exports.transformCompanyCashFlowFromReport = (parsed) => {
+    const infos = [].concat(parsed?.ENVELOPE?.DSPACCINFO || []);
+    let moneyIn = 0;
+    let moneyOut = 0;
+    infos.forEach(info => {
+        const dr = parseFloat(info?.DSPDRAMT?.DSPDRAMTA || 0);
+        const cr = parseFloat(info?.DSPCRAMT?.DSPCRAMTA || 0);
+        moneyIn += Math.abs(dr);   // DSPDRAMTA (negative) = Inflow in Tally Cash Flow
+        moneyOut += cr;             // DSPCRAMTA (positive) = Outflow in Tally Cash Flow
+    });
+    return { moneyIn, moneyOut };
+};
+
 exports.transformFromCostCategorySummary = (parsed, costCategories = []) => {
     const names = [].concat(parsed?.ENVELOPE?.DSPACCNAME || []);
     const infos = [].concat(parsed?.ENVELOPE?.DSPACCINFO || []);

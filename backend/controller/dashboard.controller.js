@@ -1,48 +1,41 @@
-const { callTally, fetchCostCategories } = require('../services/tally.services');
+const { callTally, fetchCostCategories, fetchCurrentPeriod } = require('../services/tally.services');
+const { buildCashFlowXML } = require('../templates/cashflow.xml');
 const { buildCostCategorySummaryXML } = require('../templates/costcategorysummary.xml');
-const { parseCostCategorySummaryXML } = require('../services/parser.services');
-const { transformFromCostCategorySummary } = require('../services/transformer.services');
+const { parseCashFlowXML, parseCostCategorySummaryXML } = require('../services/parser.services');
+const { transformCompanyCashFlowFromReport, transformFromCostCategorySummary } = require('../services/transformer.services');
 
 
 exports.getCompanyCashFlow = async (req, res, next) => {
     try {
-        const fromDate = process.env.FY_FROM_DATE;
-        const toDate = process.env.FY_TO_DATE;
+        const raw = await callTally(buildCashFlowXML());
+        const parsed = parseCashFlowXML(raw);
+        const result = transformCompanyCashFlowFromReport(parsed);
 
-        const [costCategories, raw] = await Promise.all([
-            fetchCostCategories(),
-            callTally(buildCostCategorySummaryXML(fromDate, toDate))
-        ]);
-
-        const parsed = parseCostCategorySummaryXML(raw);
-        const projects = transformFromCostCategorySummary(parsed, costCategories);
-
-        const moneyIn = projects.reduce((sum, p) => sum + p.feesReceived, 0);
-        const moneyOut = projects.reduce((sum, p) => sum + p.expensesDone, 0);
-
-        res.json({ success: true, data: { moneyIn, moneyOut } });
+        res.json({ success: true, data: result });
 
     } catch (err) {
         next(err);
     }
 };
 
-exports.getConfig = (req, res) => {
-    const fromDate = process.env.FY_FROM_DATE || '';
-    const startYear = parseInt(fromDate.substring(0, 4), 10);
-    const endYear = (startYear + 1).toString().slice(-2);
-    const fyLabel = `${startYear}-${endYear}`;
-    res.json({ success: true, data: { fyLabel } });
+exports.getConfig = async (req, res, next) => {
+    try {
+        const { from } = await fetchCurrentPeriod();
+        const startYear = parseInt((from || '').substring(0, 4), 10);
+        const fyLabel = isNaN(startYear)
+            ? 'No data for selected period'
+            : `${startYear}-${(startYear + 1).toString().slice(-2)}`;
+        res.json({ success: true, data: { fyLabel } });
+    } catch (err) {
+        next(err);
+    }
 };
 
 exports.getProjectCashFlow = async (req, res, next) => {
     try {
-        const fromDate = process.env.FY_FROM_DATE;
-        const toDate = process.env.FY_TO_DATE;
-
         const [costCategories, raw] = await Promise.all([
             fetchCostCategories(),
-            callTally(buildCostCategorySummaryXML(fromDate, toDate))
+            callTally(buildCostCategorySummaryXML())
         ]);
 
         const parsed = parseCostCategorySummaryXML(raw);
