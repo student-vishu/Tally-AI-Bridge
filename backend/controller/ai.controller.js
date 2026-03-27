@@ -1,9 +1,19 @@
 const { interpretPrompt } = require('../services/ai.services');
 
-exports.handleAI = (req, res) => {
-    const { prompt } = req.body;
+exports.handleAI = async (req, res, next) => {
+    try {
+        const { query, sections } = req.body;
+        if (!query) return res.status(400).json({ success: false, error: 'query is required' });
 
-    const result = interpretPrompt(prompt);
+        console.log('\n[AI Search] Query     :', query);
+        console.log('[AI Search] Sections  :', (sections || []).map(s => s.id).join(', '));
 
-    res.json({ success: true, data: result });
+        const matchedSections = await interpretPrompt({ query, sections: sections || [] });
+
+        console.log('[AI Search] Matched   :', matchedSections.length ? matchedSections.join(', ') : 'none');
+
+        res.json({ success: true, data: { sections: matchedSections } });
+    } catch (err) {
+        next(err);
+    }
 };

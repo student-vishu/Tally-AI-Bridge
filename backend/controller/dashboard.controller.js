@@ -1,4 +1,5 @@
 const { callTally, fetchCostCategories, fetchCurrentPeriod } = require('../services/tally.services');
+const SECTIONS_REGISTRY = require('../config/sections.registry');
 const { buildCashFlowXML } = require('../templates/cashflow.xml');
 const { buildCostCategorySummaryXML } = require('../templates/costcategorysummary.xml');
 const { parseCashFlowXML, parseCostCategorySummaryXML } = require('../services/parser.services');
@@ -45,6 +46,19 @@ exports.getProjectCashFlow = async (req, res, next) => {
 
     } catch (err) {
         next(err);
+    }
+};
+
+exports.getSections = (req, res) => {
+    res.json({ success: true, data: SECTIONS_REGISTRY });
+};
+
+exports.getTallyStatus = async (req, res) => {
+    try {
+        await fetchCurrentPeriod();
+        res.json({ success: true, data: { connected: true } });
+    } catch {
+        res.json({ success: true, data: { connected: false } });
     }
 };
 
