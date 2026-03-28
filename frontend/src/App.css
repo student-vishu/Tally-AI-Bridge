@@ -432,6 +432,107 @@ body {
   padding-left: 12px;
 }
 
+/* ── Ledger Table ── */
+.ledger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.ledger-card {
+  padding: 24px;
+}
+
+.ledger-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ledger-card-header .section-title {
+  margin: 0;
+}
+
+.ledger-group-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 50px;
+  background: #e8f0fe;
+  color: #1a5fc8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ledger-table-wrap {
+  overflow-x: auto;
+}
+
+.ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.ledger-table th {
+  background: #f0f4ff;
+  color: #0f3460;
+  font-weight: 600;
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 2px solid #d0d8f0;
+  white-space: nowrap;
+}
+
+.ledger-table th.num-col,
+.ledger-table td.num-col {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-table tbody tr {
+  border-bottom: 1px solid #f0f0f0;
+  transition: background 0.1s;
+}
+
+.ledger-table tbody tr:hover {
+  background: #f8f9ff;
+}
+
+.ledger-table tbody tr:nth-child(even) {
+  background: #fafbff;
+}
+
+.ledger-table tbody tr:nth-child(even):hover {
+  background: #f0f4ff;
+}
+
+.ledger-table td {
+  padding: 9px 14px;
+  color: #333;
+}
+
+.opening-row td {
+  font-weight: 500;
+  color: #555;
+}
+
+.empty-month-row td {
+  color: #aaa;
+}
+
+.grand-total-row {
+  background: #fff8e1 !important;
+  border-top: 2px solid #f5c842 !important;
+}
+
+.grand-total-row td {
+  font-weight: 700;
+  color: #333;
+  padding: 11px 14px;
+}
+
 /* ── Responsive ── */
 @media (max-width: 600px) {
   .app-header {
