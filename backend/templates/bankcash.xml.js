@@ -1,8 +1,7 @@
-// Fetch all ledgers (NAME + PARENT + master OPENINGBALANCE).
-// IMPORTANT: Do NOT include SVFROMDATE/SVTODATE here — date vars cause Tally to
-// recompute OPENINGBALANCE from full transaction history for ALL ledgers (~750+),
-// which takes >30s and times out. Without date vars, OPENINGBALANCE is read from the
-// ledger master record (the balance as-of books-beginning date), which is fast.
+// Fetch all ledgers with master OPENINGBALANCE.
+// No SVFROMDATE/SVTODATE — date vars force Tally to recompute OPENINGBALANCE
+// from full transaction history for all 750+ ledgers (timeout >30s).
+// Without date vars, OPENINGBALANCE is read from the ledger master record (fast).
 exports.buildBankCashLedgersXML = () => `
 <ENVELOPE>
   <HEADER>
@@ -28,24 +27,32 @@ exports.buildBankCashLedgersXML = () => `
   </BODY>
 </ENVELOPE>`;
 
-// Fetch all vouchers that involve a specific ledger for the period.
-// Returns flat DSPVCH* repeating tags with date, contra account, Dr/Cr amounts.
-exports.buildLedgerVouchersXML = (ledgerName, fromDate, toDate) => `
+// Fetch ALL vouchers for the FY as a collection.
+// Collections don't have the 90-row limit that report-based exports have,
+// so this reliably returns every transaction across all 12 months.
+exports.buildFYVouchersXML = (fromDate, toDate) => `
 <ENVELOPE>
   <HEADER>
-    <TALLYREQUEST>Export Data</TALLYREQUEST>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>FYVouchers</ID>
   </HEADER>
   <BODY>
-    <EXPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>Ledger Vouchers</REPORTNAME>
-        <STATICVARIABLES>
-          <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-          <SVFROMDATE>${fromDate}</SVFROMDATE>
-          <SVTODATE>${toDate}</SVTODATE>
-          <LEDGERNAME>${ledgerName}</LEDGERNAME>
-        </STATICVARIABLES>
-      </REQUESTDESC>
-    </EXPORTDATA>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVFROMDATE>${fromDate}</SVFROMDATE>
+        <SVTODATE>${toDate}</SVTODATE>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="FYVouchers">
+            <TYPE>Voucher</TYPE>
+            <FETCH>DATE, ALLLEDGERENTRIES.LEDGERNAME, ALLLEDGERENTRIES.AMOUNT, ALLLEDGERENTRIES.ISDEEMEDPOSITIVE</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
   </BODY>
 </ENVELOPE>`;

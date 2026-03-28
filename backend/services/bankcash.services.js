@@ -1,87 +1,87 @@
 const { callTally } = require('./tally.services');
-const { buildBankCashLedgersXML, buildLedgerVouchersXML } = require('../templates/bankcash.xml');
+const { buildBankCashLedgersXML, buildFYVouchersXML } = require('../templates/bankcash.xml');
 
 const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
 
-const MONTHS_SHORT = { Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12 };
-
-// Parse Tally balance string: plain number (negative = Cr in Tally master)
+// In Tally master: negative OPENINGBALANCE = Dr (asset has value), positive = Cr (overdraft/liability).
+// This is Tally's internal convention for asset-group ledgers (Bank Accounts, Cash-in-Hand).
 function parseOpeningBalance(str) {
     if (!str || str === '0' || str === '0.00') return { amount: 0, isDr: true };
     const s = String(str).trim().replace(/,/g, '');
     const val = parseFloat(s);
     if (isNaN(val)) return { amount: 0, isDr: true };
-    // Tally stores opening balance as negative when it's a Credit balance
-    return { amount: Math.abs(val), isDr: val >= 0 };
+    return { amount: Math.abs(val), isDr: val < 0 }; // negative = Dr for asset accounts
 }
 
-// Parse "D-Mon-YY" or "D-Mon-YYYY" date string → "YYYYMM" month key
-function parseDspDate(dateStr) {
-    if (!dateStr) return null;
-    const m = dateStr.trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$/);
-    if (!m) return null;
-    const monthNum = MONTHS_SHORT[m[2]];
-    if (!monthNum) return null;
-    let year = parseInt(m[3], 10);
-    if (year < 100) year += 2000;
-    return { monthKey: `${year}${String(monthNum).padStart(2, '0')}`, monthNum, year };
+// Generate all 12 month keys for a FY (Apr YYYY → Mar YYYY+1)
+function getFYMonthKeys(fromDate) {
+    const fyStart = parseInt(fromDate.substring(0, 4), 10); // e.g. 2022
+    const keys = [];
+    for (let m = 4; m <= 12; m++) keys.push(`${fyStart}${String(m).padStart(2, '0')}`);
+    for (let m = 1; m <= 3; m++)  keys.push(`${fyStart + 1}${String(m).padStart(2, '0')}`);
+    return keys; // ["202204", "202205", ..., "202303"]
 }
 
-// Parse "Ledger Vouchers" report response → { [YYYYMM]: { monthKey, monthLabel, debit, credit } }
-// Response format: flat repeating <DSPVCHDATE>, <DSPVCHDRAMT>, <DSPVCHCRAMT> tags
-function parseLedgerVouchers(raw, ledgerName) {
+// Parse the full-year Voucher Collection response → monthly Dr/Cr per ledger
+// Voucher XML: <VOUCHER ...><DATE>YYYYMMDD</DATE> ... <ALLLEDGERENTRIES.LIST>
+//                <LEDGERNAME>X</LEDGERNAME><ISDEEMEDPOSITIVE>Yes|No</ISDEEMEDPOSITIVE>
+//                <AMOUNT>-1234.56</AMOUNT></ALLLEDGERENTRIES.LIST>...
+function parseVoucherCollection(raw, bankCashLedgers) {
+    // monthData: { ledgerName: { YYYYMM: { debit, credit } } }
     const monthData = {};
+    for (const name of bankCashLedgers) monthData[name] = {};
 
-    // Extract all DSPVCHDATE values and their positions
-    const datePattern = /<DSPVCHDATE>([^<]*)<\/DSPVCHDATE>/g;
-    const drPattern = /<DSPVCHDRAMT>([^<]*)<\/DSPVCHDRAMT>/g;
-    const crPattern = /<DSPVCHCRAMT>([^<]*)<\/DSPVCHCRAMT>/g;
+    const voucherRegex = /<VOUCHER [^>]*>([\s\S]*?)<\/VOUCHER>/g;
+    let vMatch;
+    let voucherCount = 0;
 
-    // Collect all values in order
-    const dates = [...raw.matchAll(datePattern)].map(m => m[1].trim());
-    const drs   = [...raw.matchAll(drPattern)].map(m => m[1].trim());
-    const crs   = [...raw.matchAll(crPattern)].map(m => m[1].trim());
+    while ((vMatch = voucherRegex.exec(raw)) !== null) {
+        const body = vMatch[1];
+        voucherCount++;
 
-    console.log(`[BankCash] "${ledgerName}" voucher rows:`, dates.length);
+        const dateMatch = body.match(/<DATE[^>]*>(\d{8})<\/DATE>/);
+        if (!dateMatch) continue;
+        const monthKey = dateMatch[1].substring(0, 6); // YYYYMM
 
-    for (let i = 0; i < dates.length; i++) {
-        const parsed = parseDspDate(dates[i]);
-        if (!parsed) continue;
+        const entryRegex = /<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/g;
+        let eMatch;
+        while ((eMatch = entryRegex.exec(body)) !== null) {
+            const ebody = eMatch[1];
 
-        const { monthKey, monthNum, year } = parsed;
-        const monthLabel = `${MONTH_NAMES[monthNum] || '?'} ${year}`;
+            const nameMatch = ebody.match(/<LEDGERNAME[^>]*>([^<]+)<\/LEDGERNAME>/);
+            if (!nameMatch) continue;
+            const ledger = nameMatch[1].trim();
+            if (!monthData[ledger]) continue; // not a bank/cash ledger we care about
 
-        // DSPVCHDRAMT: non-empty → Cash/Bank was debited (receipt), abs() for amount
-        const drRaw = drs[i] || '';
-        const crRaw = crs[i] || '';
+            const amtMatch  = ebody.match(/<AMOUNT[^>]*>([^<]+)<\/AMOUNT>/);
+            const isDrMatch = ebody.match(/<ISDEEMEDPOSITIVE[^>]*>([^<]+)<\/ISDEEMEDPOSITIVE>/);
+            if (!amtMatch) continue;
 
-        const debit  = drRaw !== '' ? Math.abs(parseFloat(drRaw) || 0) : 0;
-        const credit = crRaw !== '' ? Math.abs(parseFloat(crRaw) || 0) : 0;
+            const amount = Math.abs(parseFloat(amtMatch[1]) || 0);
+            if (amount === 0) continue;
 
-        if (debit === 0 && credit === 0) continue;
+            const isDr = (isDrMatch?.[1]?.trim() || 'No').toLowerCase() === 'yes';
 
-        if (!monthData[monthKey]) {
-            monthData[monthKey] = { monthKey, monthLabel, debit: 0, credit: 0 };
+            if (!monthData[ledger][monthKey]) monthData[ledger][monthKey] = { debit: 0, credit: 0 };
+            if (isDr) monthData[ledger][monthKey].debit  += amount;
+            else      monthData[ledger][monthKey].credit += amount;
         }
-        monthData[monthKey].debit  += debit;
-        monthData[monthKey].credit += credit;
     }
 
-    console.log(`[BankCash] "${ledgerName}" months:`, Object.keys(monthData).join(', ') || 'none');
+    console.log(`[BankCash] Parsed ${voucherCount} vouchers`);
     return monthData;
 }
 
 exports.fetchBankCashData = async (fromDate, toDate) => {
     console.log('[BankCash] Fetching', fromDate, '->', toDate);
 
-    // Step 1: Get all ledgers with master opening balances (no date vars → fast read)
+    // Step 1: Get all ledgers + master opening balances (single fast call, no date vars)
     const ledgersRaw = await callTally(buildBankCashLedgersXML());
 
     const BANK_CASH_GROUPS = new Set(['Bank Accounts', 'Cash-in-Hand']);
-    // Allow extra attributes on LEDGER tag (e.g. RESERVEDNAME="") and child element TYPE attributes
     const ledgerMatches = [...ledgersRaw.matchAll(/<LEDGER NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/g)];
-    console.log('[BankCash] All ledgers in response:', ledgerMatches.length);
+    console.log('[BankCash] All ledgers:', ledgerMatches.length);
 
     const ledgerMap = {};
     for (const m of ledgerMatches) {
@@ -90,67 +90,54 @@ exports.fetchBankCashData = async (fromDate, toDate) => {
         const parentMatch = body.match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
         const balMatch    = body.match(/<OPENINGBALANCE[^>]*>([^<]*)<\/OPENINGBALANCE>/);
         const parent = parentMatch ? parentMatch[1].trim() : '';
-
         if (!BANK_CASH_GROUPS.has(parent)) continue;
 
         const { amount: openAmt, isDr: openIsDr } = parseOpeningBalance(balMatch ? balMatch[1] : '0');
-        ledgerMap[name] = { name, group: parent, openingBalance: openAmt, openingDr: openIsDr, monthData: {} };
+        ledgerMap[name] = { name, group: parent, openingBalance: openAmt, openingDr: openIsDr };
     }
 
-    console.log('[BankCash] Bank/Cash ledgers:', Object.keys(ledgerMap).join(', ') || 'none');
+    const bankCashNames = Object.keys(ledgerMap);
+    console.log('[BankCash] Bank/Cash ledgers:', bankCashNames.join(', ') || 'none');
 
-    if (!Object.keys(ledgerMap).length) {
-        return { ledgers: [] };
-    }
+    if (!bankCashNames.length) return { ledgers: [] };
 
-    // Step 2: Fetch "Ledger Vouchers" report per ledger (serialized via Tally queue)
-    const ledgerNames = Object.keys(ledgerMap);
-    const reports = await Promise.all(
-        ledgerNames.map(name =>
-            callTally(buildLedgerVouchersXML(name, fromDate, toDate))
-                .then(raw => ({ name, raw }))
-                .catch(err => {
-                    console.error(`[BankCash] Error fetching vouchers for "${name}":`, err.message);
-                    return { name, raw: '' };
-                })
-        )
-    );
+    // Step 2: Fetch ALL FY vouchers in one call — no 90-row limit, all months included
+    const vouchersRaw = await callTally(buildFYVouchersXML(fromDate, toDate));
+    const monthData = parseVoucherCollection(vouchersRaw, bankCashNames);
 
-    // Step 3: Parse each voucher report into monthly totals
-    for (const { name, raw } of reports) {
-        if (!raw) continue;
-        ledgerMap[name].monthData = parseLedgerVouchers(raw, name);
-    }
+    // Step 3: Build output — include ALL 12 FY months (Apr → Mar), even zero-transaction ones
+    const fyMonthKeys = getFYMonthKeys(fromDate);
 
-    // Step 4: Build output structure
-    const ledgers = Object.values(ledgerMap).map(l => {
-        const months = Object.values(l.monthData)
-            .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-
-        // runningBalance: positive = Dr (asset), negative = Cr (liability/overdraft)
+    const ledgers = bankCashNames.map(name => {
+        const l = ledgerMap[name];
         let runningBalance = l.openingDr ? l.openingBalance : -l.openingBalance;
-        let grandDebit = 0;
-        let grandCredit = 0;
+        let grandDebit = 0, grandCredit = 0;
 
-        const monthsOut = months.map(m => {
-            runningBalance += m.debit - m.credit;
-            grandDebit  += m.debit;
-            grandCredit += m.credit;
+        const months = fyMonthKeys.map(mk => {
+            const data = monthData[name]?.[mk] || { debit: 0, credit: 0 };
+            runningBalance += data.debit - data.credit;
+            grandDebit  += data.debit;
+            grandCredit += data.credit;
+
+            const yr  = parseInt(mk.substring(0, 4), 10);
+            const mon = parseInt(mk.substring(4, 6), 10);
             return {
-                month: m.monthLabel,
-                debit: m.debit,
-                credit: m.credit,
+                month: `${MONTH_NAMES[mon]} ${yr}`,
+                debit: data.debit,
+                credit: data.credit,
                 closingBalance: Math.abs(runningBalance),
                 closingDr: runningBalance >= 0
             };
         });
+
+        console.log(`[BankCash] ${name}: months with data = ${fyMonthKeys.filter(mk => monthData[name]?.[mk]).length}/12`);
 
         return {
             name: l.name,
             group: l.group,
             openingBalance: l.openingBalance,
             openingDr: l.openingDr,
-            months: monthsOut,
+            months,
             grandDebit,
             grandCredit,
             closingBalance: Math.abs(runningBalance),
@@ -158,12 +145,11 @@ exports.fetchBankCashData = async (fromDate, toDate) => {
         };
     });
 
-    // Sort: Bank Accounts first, Cash-in-Hand after; alphabetical within group
+    // Sort: Bank Accounts first, then Cash-in-Hand; alphabetical within group
     ledgers.sort((a, b) => {
         if (a.group === b.group) return a.name.localeCompare(b.name);
         return a.group === 'Bank Accounts' ? -1 : 1;
     });
 
-    console.log('[BankCash] Result:', ledgers.map(l => `${l.name}(${l.months.length}mo)`).join(', '));
     return { ledgers };
 };

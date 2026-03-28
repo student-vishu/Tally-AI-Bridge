@@ -70,12 +70,14 @@ exports.fetchCostCategories = async () => {
   return matches.map(m => m[1]);
 };
 
-const COMPANY_PERIOD_XML = `<ENVELOPE>
+// Collection + COMPUTE to expose ##SVFROMDATE / ##SVTODATE (Tally ERP 9 compatible).
+// Also fetches STARTINGFROM and ENDINGAT as fallbacks.
+const CURRENT_PERIOD_XML = `<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
     <TALLYREQUEST>Export</TALLYREQUEST>
     <TYPE>Collection</TYPE>
-    <ID>CompanyPeriod</ID>
+    <ID>CurrentPeriod</ID>
   </HEADER>
   <BODY>
     <DESC>
@@ -84,9 +86,11 @@ const COMPANY_PERIOD_XML = `<ENVELOPE>
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
-          <COLLECTION NAME="CompanyPeriod">
+          <COLLECTION NAME="CurrentPeriod">
             <TYPE>Company</TYPE>
             <FETCH>NAME, STARTINGFROM, ENDINGAT</FETCH>
+            <COMPUTE>FROMDATE : $$String:##SVFROMDATE</COMPUTE>
+            <COMPUTE>TODATE : $$String:##SVTODATE</COMPUTE>
           </COLLECTION>
         </TDLMESSAGE>
       </TDL>
@@ -97,7 +101,7 @@ const COMPANY_PERIOD_XML = `<ENVELOPE>
 // Cache the period so multiple endpoints don't hit Tally on every page load
 let _periodCache = null;
 let _periodCacheTime = 0;
-const PERIOD_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const PERIOD_CACHE_TTL = 30 * 1000; // 30 seconds — short enough that switching year in Tally reflects on next refresh
 // In-flight promise lock — prevents multiple simultaneous Tally calls for the same period XML
 let _periodInflight = null;
 
@@ -134,34 +138,31 @@ exports.fetchCurrentPeriod = async () => {
 
   _periodInflight = (async () => {
     try {
-      const raw = await exports.callTally(COMPANY_PERIOD_XML);
-      console.log('[fetchCurrentPeriod] raw (first 400):', raw.substring(0, 400));
+      const raw = await exports.callTally(CURRENT_PERIOD_XML);
+      console.log('[fetchCurrentPeriod] raw (first 300):', raw.substring(0, 300));
 
-      // Match <STARTINGFROM> allowing optional attributes like TYPE="Date"
-      const fromElem =
-        raw.match(/<STARTINGFROM[^>]*>([^<]+)<\/STARTINGFROM>/)?.[1] ||
-        raw.match(/<BOOKSFROM[^>]*>([^<]+)<\/BOOKSFROM>/)?.[1] ||
-        raw.match(/<BOOKSBEGINNINGFROM[^>]*>([^<]+)<\/BOOKSBEGINNINGFROM>/)?.[1];
-
-      // Fallback: company NAME attribute contains "(from D-Mon-YY)"
-      const fromName = raw.match(/COMPANY NAME="[^"]*\(from ([^)]+)\)"/)?.[1];
-
-      // Last resort: use env-configured dates if set
-      const fromEnv = process.env.FY_FROM_DATE || '';
-
-      const dateStr = fromElem || fromName || '';
-      console.log('[fetchCurrentPeriod] dateStr:', dateStr);
+      // Try computed SVFROMDATE/SVTODATE first (reflects currently-selected year in Tally UI)
+      const fromStr =
+        raw.match(/<FROMDATE[^>]*>([^<]+)<\/FROMDATE>/)?.[1]?.trim() ||
+        raw.match(/<SVFROMDATE[^>]*>([^<]+)<\/SVFROMDATE>/)?.[1]?.trim() ||
+        raw.match(/<STARTINGFROM[^>]*>([^<]+)<\/STARTINGFROM>/)?.[1]?.trim() ||
+        raw.match(/<BOOKSFROM[^>]*>([^<]+)<\/BOOKSFROM>/)?.[1]?.trim() || '';
+      const toStr =
+        raw.match(/<TODATE[^>]*>([^<]+)<\/TODATE>/)?.[1]?.trim() ||
+        raw.match(/<SVTODATE[^>]*>([^<]+)<\/SVTODATE>/)?.[1]?.trim() ||
+        raw.match(/<ENDINGAT[^>]*>([^<]+)<\/ENDINGAT>/)?.[1]?.trim() || '';
+      console.log('[fetchCurrentPeriod] fromStr:', fromStr, '| toStr:', toStr);
 
       let result;
-      const fyStart = parseDateStr(dateStr);
+      const fyStart = parseDateStr(fromStr);
       if (fyStart) {
-        result = { from: `${fyStart}0401`, to: `${fyStart + 1}0331` };
-      } else if (fromEnv && process.env.FY_TO_DATE) {
-        // Use env-configured dates directly
-        result = { from: fromEnv, to: process.env.FY_TO_DATE };
+        result = { from: `${fyStart}0401`, to: `${fyStart + 1}0331`, booksFromYear: fyStart };
+      } else if (process.env.FY_FROM_DATE && process.env.FY_TO_DATE) {
+        const envYear = parseDateStr(process.env.FY_FROM_DATE);
+        result = { from: process.env.FY_FROM_DATE, to: process.env.FY_TO_DATE, booksFromYear: envYear || null };
         console.log('[fetchCurrentPeriod] using env fallback:', result);
       } else {
-        result = { from: '', to: '' };
+        result = { from: '', to: '', booksFromYear: null };
       }
 
       // Only cache a valid (non-empty) result so a bad Tally response doesn't poison the cache
