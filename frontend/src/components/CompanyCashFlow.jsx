@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 const formatINR = (value) =>
   new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
@@ -9,6 +11,8 @@ function balanceDisplay(amount, isDr) {
 }
 
 function LedgerTable({ ledger }) {
+  const [expanded, setExpanded] = useState(false)
+
   return (
     <div className="section-card ledger-card">
       <div className="ledger-card-header">
@@ -20,7 +24,14 @@ function LedgerTable({ ledger }) {
         <table className="ledger-table">
           <thead>
             <tr>
-              <th>Particulars</th>
+              <th>
+                <span className="particulars-header">
+                  Particulars
+                  <button className="expand-btn" onClick={() => setExpanded(e => !e)} title="Toggle months">
+                    {expanded ? '▲' : '▼'}
+                  </button>
+                </span>
+              </th>
               <th className="num-col">Debit</th>
               <th className="num-col">Credit</th>
               <th className="num-col">Closing Balance</th>
@@ -34,7 +45,7 @@ function LedgerTable({ ledger }) {
               <td className="num-col">{balanceDisplay(ledger.openingBalance, ledger.openingDr)}</td>
             </tr>
 
-            {ledger.months.map((m) => (
+            {expanded && ledger.months.map((m) => (
               <tr key={m.month} className={m.debit === 0 && m.credit === 0 ? 'empty-month-row' : ''}>
                 <td>{m.month}</td>
                 <td className="num-col">{m.debit > 0 ? formatINR(m.debit) : ''}</td>
