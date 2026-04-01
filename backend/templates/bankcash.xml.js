@@ -27,6 +27,32 @@ exports.buildBankCashLedgersXML = () => `
   </BODY>
 </ENVELOPE>`;
 
+// Fetch all Tally groups with their parent — used to build the group tree for classification.
+exports.buildGroupsXML = () => `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>AllGroups</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="AllGroups">
+            <TYPE>Group</TYPE>
+            <FETCH>NAME, PARENT</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+
 // Fetch ALL vouchers for the FY as a collection.
 // Collections don't have the 90-row limit that report-based exports have,
 // so this reliably returns every transaction across all 12 months.

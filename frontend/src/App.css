@@ -549,6 +549,153 @@ body {
   line-height: 1;
 }
 
+.month-particulars {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.month-expand-btn {
+  color: #8899cc;
+}
+
+.month-row-active td {
+  background: #eef2ff !important;
+  font-weight: 500;
+}
+
+/* ── Month Detail Panel ── */
+.month-detail-row > td {
+  padding: 0 !important;
+  background: #f4f6fb;
+  border-bottom: 2px solid #d8deef;
+}
+
+.month-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px;
+}
+
+.mdc-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mdc-side-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  border-left: 3px solid;
+}
+
+.mdc-side-header--debit {
+  background: #f0faf4;
+  color: #1a7a4a;
+  border-color: #1a7a4a;
+}
+
+.mdc-side-header--credit {
+  background: #fff5f5;
+  color: #b71c1c;
+  border-color: #b71c1c;
+}
+
+.mdc-side-label { text-transform: uppercase; letter-spacing: 0.6px; }
+.mdc-side-total { font-variant-numeric: tabular-nums; }
+
+.mdc-side-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Each category is a self-contained card */
+.mdc-card {
+  flex: 1 1 200px;
+  min-width: 200px;
+  background: var(--cat-bg);
+  border: 1px solid var(--cat-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.mdc-card-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--cat-color);
+  background: color-mix(in srgb, var(--cat-bg) 60%, white);
+  border-bottom: 1px solid var(--cat-border);
+}
+
+.mdc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cat-color);
+  flex-shrink: 0;
+}
+
+.mdc-rows {
+  padding: 6px 0;
+}
+
+.mdc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 12px;
+}
+
+.mdc-name {
+  font-size: 12px;
+  color: #444;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mdc-amt {
+  font-size: 12px;
+  color: #222;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.mdc-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--cat-color);
+  border-top: 1px solid var(--cat-border);
+  background: color-mix(in srgb, var(--cat-bg) 40%, white);
+}
+
+.month-detail-empty {
+  padding: 12px 20px !important;
+  color: #aaa;
+  font-style: italic;
+  font-size: 13px;
+}
+
 /* ── Responsive ── */
 @media (max-width: 600px) {
   .app-header {
