@@ -696,6 +696,142 @@ body {
   font-size: 13px;
 }
 
+/* ── Project Cashflow Expand ── */
+.project-expand-btn {
+  background: none;
+  border: 1px solid #c5cce8;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  font-size: 9px;
+  color: #0f3460;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+  vertical-align: middle;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.project-expand-btn:hover {
+  background: #e8eeff;
+  border-color: #0f3460;
+}
+
+.project-expand-btn.proj-spinning {
+  animation: spin 0.8s linear infinite;
+  border-color: #8899cc;
+  color: #8899cc;
+}
+
+.project-row-expanded td {
+  background: #eef2ff;
+  font-weight: 600;
+}
+
+.project-expand-row > td {
+  padding: 0 !important;
+  background: #f4f7fb;
+  border-bottom: 2px solid #c5cce8;
+}
+
+.project-expand-panel {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.project-expand-empty {
+  padding: 14px 20px;
+  color: #aaa;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.project-subcategory {
+  border: 1px solid #d0d8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.project-subcategory-header {
+  background: linear-gradient(90deg, #0f3460, #16213e);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 14px;
+  letter-spacing: 0.3px;
+}
+
+.project-monthly-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.project-monthly-table th {
+  background: #eef2ff;
+  color: #0f3460;
+  font-weight: 600;
+  padding: 8px 14px;
+  text-align: left;
+  border-bottom: 1px solid #d0d8f0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.project-monthly-table th.pm-num,
+.project-monthly-table td.pm-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.project-monthly-table tbody tr {
+  border-bottom: 1px solid #eef0f8;
+  transition: background 0.1s;
+}
+
+.project-monthly-table tbody tr:hover {
+  background: #f5f7ff;
+}
+
+.project-monthly-table tbody tr:nth-child(even) {
+  background: #fafbff;
+}
+
+.project-monthly-table tbody tr:nth-child(even):hover {
+  background: #f0f4ff;
+}
+
+.project-monthly-table td {
+  padding: 7px 14px;
+  color: #333;
+}
+
+.pm-closing {
+  color: #0f3460;
+  font-weight: 500;
+}
+
+.pm-dr-cr {
+  font-size: 10px;
+  font-weight: 700;
+  color: #8899cc;
+  letter-spacing: 0.3px;
+}
+
+.pm-grand-total td {
+  font-weight: 700;
+  background: #fff8e1 !important;
+  border-top: 2px solid #f5c842;
+  padding: 9px 14px;
+}
+
 /* ── Responsive ── */
 @media (max-width: 600px) {
   .app-header {

@@ -8,19 +8,19 @@ const _tallyQueue = [];
 function _dequeue() {
   if (_tallyBusy || _tallyQueue.length === 0) return;
   _tallyBusy = true;
-  const { xml, resolve, reject } = _tallyQueue.shift();
-  _doCallTally(xml).then(resolve, reject).finally(() => {
+  const { xml, resolve, reject, timeout } = _tallyQueue.shift();
+  _doCallTally(xml, timeout).then(resolve, reject).finally(() => {
     _tallyBusy = false;
     _dequeue();
   });
 }
 
-async function _doCallTally(xml) {
+async function _doCallTally(xml, timeout = 35000) {
   let res;
   try {
     res = await axios.post(process.env.TALLY_URL, xml, {
       headers: { 'Content-Type': 'text/xml' },
-      timeout: 35000
+      timeout
     });
   } catch (err) {
     throw new Error('Tally not reachable: ' + err.message);
@@ -34,9 +34,9 @@ async function _doCallTally(xml) {
   return res.data;
 }
 
-exports.callTally = (xml) => {
+exports.callTally = (xml, timeout = 35000) => {
   return new Promise((resolve, reject) => {
-    _tallyQueue.push({ xml, resolve, reject });
+    _tallyQueue.push({ xml, resolve, reject, timeout });
     _dequeue();
   });
 };
