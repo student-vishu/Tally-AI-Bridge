@@ -465,6 +465,38 @@ body {
   letter-spacing: 0.5px;
 }
 
+.export-excel-btn {
+  padding: 5px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: #1a7a4a;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.export-excel-btn:hover { background: #155f3a; }
+
+.ledger-group-separator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 4px;
+}
+.lgs-line {
+  flex: 1;
+  height: 1px;
+  background: #c0c0c0;
+}
+.lgs-label {
+  font-size: 1.75rem;
+  font-weight: 900;
+  color: #555;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .ledger-table-wrap {
   overflow-x: auto;
 }
