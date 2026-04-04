@@ -236,7 +236,7 @@ function applyStyle(cell, { bg, color, bold, border } = {}) {
 
 function buildInOutSheet(wb, banks, months, side, sheetName) {
   const ws = wb.addWorksheet(sheetName)
-  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 0, topLeftCell: 'B1' }]
+  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1, topLeftCell: 'B2' }]
   ws.getColumn(1).width = 35
   months.forEach((_, i) => { ws.getColumn(i + 2).width = 14 })
   ws.getColumn(months.length + 2).width = 14
@@ -281,7 +281,7 @@ function buildInOutSheet(wb, banks, months, side, sheetName) {
 
 function buildSummarySheet(wb, banks, months) {
   const ws = wb.addWorksheet('Actual Summary')
-  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 0, topLeftCell: 'B1' }]
+  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1, topLeftCell: 'B2' }]
   ws.getColumn(1).width = 22
   months.forEach((_, i) => { ws.getColumn(i + 2).width = 14 })
 
@@ -325,6 +325,12 @@ function buildSummarySheet(wb, banks, months) {
 
 async function exportToExcel(ledgers) {
   const ExcelJS = (await import('exceljs')).default
+  // Fetch fresh at export time — no cache — so company switch reflects immediately
+  let companyName = '', fyLabel = ''
+  try {
+    const cfg = await fetch('/api/dashboard/current-company').then(r => r.json())
+    if (cfg.success) { companyName = cfg.data.companyName || ''; fyLabel = cfg.data.fyLabel || '' }
+  } catch { /* use empty strings */ }
   const banks  = ledgers.filter(l => l.group === 'Bank Accounts' || l.group === 'Cash-in-Hand')
   const months = banks[0]?.months.map(m => m.month) || []
   const wb     = new ExcelJS.Workbook()
@@ -337,7 +343,8 @@ async function exportToExcel(ledgers) {
   const blob   = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url    = URL.createObjectURL(blob)
   const a      = document.createElement('a')
-  a.href = url; a.download = 'Money In_Out.xlsx'; a.click()
+  const prefix = [companyName, fyLabel].filter(Boolean).join('_')
+  a.href = url; a.download = `${prefix}_Money In_Out.xlsx`; a.click()
   URL.revokeObjectURL(url)
 }
 

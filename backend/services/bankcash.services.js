@@ -1,4 +1,4 @@
-const { callTally } = require('./tally.services');
+const { callTally, decodeXml } = require('./tally.services');
 const { buildBankCashLedgersXML, buildFYVouchersXML, buildGroupsXML } = require('../templates/bankcash.xml');
 
 const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -115,7 +115,7 @@ function parseVoucherCollection(raw, bankCashLedgers, ledgerGroupMap, groupParen
             const amtMatch  = ebody.match(/<AMOUNT[^>]*>([^<]+)<\/AMOUNT>/);
             const isDrMatch = ebody.match(/<ISDEEMEDPOSITIVE[^>]*>([^<]+)<\/ISDEEMEDPOSITIVE>/);
             if (!nameMatch || !amtMatch) continue;
-            const ledger = nameMatch[1].trim();
+            const ledger = decodeXml(nameMatch[1].trim());
             const amount = Math.abs(parseFloat(amtMatch[1]) || 0);
             if (amount === 0) continue;
             const isDr = (isDrMatch?.[1]?.trim() || 'No').toLowerCase() === 'yes';
@@ -191,11 +191,11 @@ exports.fetchBankCashData = async (fromDate, toDate) => {
     const allLedgerGroupMap = {};   // every ledger → its Tally parent group
 
     for (const m of ledgerMatches) {
-        const name = m[1];
+        const name = decodeXml(m[1]);
         const body = m[2];
         const parentMatch = body.match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
         const balMatch    = body.match(/<OPENINGBALANCE[^>]*>([^<]*)<\/OPENINGBALANCE>/);
-        const parent = parentMatch ? parentMatch[1].trim() : '';
+        const parent = parentMatch ? decodeXml(parentMatch[1].trim()) : '';
 
         allLedgerGroupMap[name] = parent;
 
@@ -214,7 +214,7 @@ exports.fetchBankCashData = async (fromDate, toDate) => {
     const groupParentMap = {};
     for (const m of groupsRaw.matchAll(/<GROUP NAME="([^"]+)"[^>]*>([\s\S]*?)<\/GROUP>/g)) {
         const parentMatch = m[2].match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
-        if (parentMatch) groupParentMap[m[1].toLowerCase().trim()] = parentMatch[1].toLowerCase().trim();
+        if (parentMatch) groupParentMap[decodeXml(m[1]).toLowerCase().trim()] = decodeXml(parentMatch[1]).toLowerCase().trim();
     }
     console.log('[BankCash] Groups fetched:', Object.keys(groupParentMap).length);
 

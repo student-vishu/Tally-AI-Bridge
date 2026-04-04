@@ -41,6 +41,9 @@ exports.callTally = (xml, timeout = 35000) => {
   });
 };
 
+const decodeXml = s => s.replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+exports.decodeXml = decodeXml;
+
 const COST_CATEGORIES_XML = `<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
@@ -67,7 +70,7 @@ const COST_CATEGORIES_XML = `<ENVELOPE>
 exports.fetchCostCategories = async () => {
   const raw = await exports.callTally(COST_CATEGORIES_XML);
   const matches = [...raw.matchAll(/COSTCATEGORY NAME="([^"]+)"/g)];
-  return matches.map(m => m[1]);
+  return matches.map(m => decodeXml(m[1]));
 };
 
 // Collection + COMPUTE to expose ##SVFROMDATE / ##SVTODATE (Tally ERP 9 compatible).
@@ -87,10 +90,10 @@ const CURRENT_PERIOD_XML = `<ENVELOPE>
       <TDL>
         <TDLMESSAGE>
           <COLLECTION NAME="CurrentPeriod">
-            <TYPE>Company</TYPE>
-            <FETCH>NAME, STARTINGFROM, ENDINGAT</FETCH>
+            <TYPE>Group</TYPE>
             <COMPUTE>FROMDATE : $$String:##SVFROMDATE</COMPUTE>
             <COMPUTE>TODATE : $$String:##SVTODATE</COMPUTE>
+            <COMPUTE>CONAME : $$String:##SVCURRENTCOMPANY</COMPUTE>
           </COLLECTION>
         </TDLMESSAGE>
       </TDL>
@@ -128,6 +131,11 @@ function parseDateStr(s) {
   return null;
 }
 
+exports.clearPeriodCache = () => {
+    _periodCache    = null;
+    _periodCacheTime = 0;
+};
+
 exports.fetchCurrentPeriod = async () => {
   if (_periodCache && (Date.now() - _periodCacheTime) < PERIOD_CACHE_TTL) {
     return _periodCache;
@@ -139,7 +147,8 @@ exports.fetchCurrentPeriod = async () => {
   _periodInflight = (async () => {
     try {
       const raw = await exports.callTally(CURRENT_PERIOD_XML);
-      console.log('[fetchCurrentPeriod] raw (first 300):', raw.substring(0, 300));
+      console.log('[fetchCurrentPeriod] raw[0-600]:', raw.substring(0, 600));
+      console.log('[fetchCurrentPeriod] raw[1000-2000]:', raw.substring(1000, 2000));
 
       // Try computed SVFROMDATE/SVTODATE first (reflects currently-selected year in Tally UI)
       const fromStr =
@@ -153,16 +162,24 @@ exports.fetchCurrentPeriod = async () => {
         raw.match(/<ENDINGAT[^>]*>([^<]+)<\/ENDINGAT>/)?.[1]?.trim() || '';
       console.log('[fetchCurrentPeriod] fromStr:', fromStr, '| toStr:', toStr);
 
+      // ##SVCOMPANY system variable (like ##SVFROMDATE) returns the active company name.
+      // Fallback: <NAME> child element with the " - (from D-Mon-YY)" suffix stripped.
+      const coname  = raw.match(/<CONAME[^>]*>([^<]+)<\/CONAME>/)?.[1]?.trim() || '';
+      const rawName = coname ||
+        raw.match(/<NAME[^>]*>([^<]+)<\/NAME>/)?.[1]?.trim() || '';
+      const companyName = decodeXml(rawName.replace(/\s*-\s*\(from\s+[^)]+\)\s*$/, '').trim());
+      console.log('[fetchCurrentPeriod] coname:', coname, '| companyName:', companyName);
+
       let result;
       const fyStart = parseDateStr(fromStr);
       if (fyStart) {
-        result = { from: `${fyStart}0401`, to: `${fyStart + 1}0331`, booksFromYear: fyStart };
+        result = { from: `${fyStart}0401`, to: `${fyStart + 1}0331`, booksFromYear: fyStart, companyName };
       } else if (process.env.FY_FROM_DATE && process.env.FY_TO_DATE) {
         const envYear = parseDateStr(process.env.FY_FROM_DATE);
-        result = { from: process.env.FY_FROM_DATE, to: process.env.FY_TO_DATE, booksFromYear: envYear || null };
+        result = { from: process.env.FY_FROM_DATE, to: process.env.FY_TO_DATE, booksFromYear: envYear || null, companyName };
         console.log('[fetchCurrentPeriod] using env fallback:', result);
       } else {
-        result = { from: '', to: '', booksFromYear: null };
+        result = { from: '', to: '', booksFromYear: null, companyName };
       }
 
       // Only cache a valid (non-empty) result so a bad Tally response doesn't poison the cache

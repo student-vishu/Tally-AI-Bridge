@@ -465,6 +465,13 @@ body {
   letter-spacing: 0.5px;
 }
 
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
 .export-excel-btn {
   padding: 5px 14px;
   font-size: 0.8rem;

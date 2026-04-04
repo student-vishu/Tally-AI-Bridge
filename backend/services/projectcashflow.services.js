@@ -1,4 +1,4 @@
-const { callTally, fetchCostCategories } = require('./tally.services');
+const { callTally, fetchCostCategories, decodeXml } = require('./tally.services');
 const { buildCostCentreHierarchyXML } = require('../templates/costcentre.xml');
 const { buildCostCategorySummaryMonthXML } = require('../templates/costcategorysummary.xml');
 const { parseCostCategorySummaryXML } = require('./parser.services');
@@ -66,9 +66,9 @@ async function fetchCostCentreHierarchy() {
     const parentMap   = {};
 
     for (const m of raw.matchAll(/<COSTCENTRE NAME="([^"]+)"[^>]*>([\s\S]*?)<\/COSTCENTRE>/g)) {
-        const name = m[1];
+        const name = decodeXml(m[1]);
         const pm   = m[2].match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
-        const parent = pm ? pm[1].trim() : '';
+        const parent = pm ? decodeXml(pm[1].trim()) : '';
         if (parent) {
             parentMap[name] = parent;
             if (!childrenMap[parent]) childrenMap[parent] = [];
@@ -268,6 +268,44 @@ function buildMonthlyData(monthlyMap, fyStart) {
 
     return { months, grandDebit, grandCredit, closingBalance: Math.abs(running), closingDr: running >= 0 };
 }
+
+// ─── All projects expand (single call, shared cache) ─────────────────────────
+exports.fetchAllProjectsExpand = async (from, to) => {
+    const fyStart = parseInt(from.substring(0, 4), 10);
+
+    const [{ childrenMap }, costCategories, ccMonthly] = await Promise.all([
+        fetchCostCentreHierarchy(),
+        fetchCostCategories(),
+        fetchFYMonthlyData(fyStart)
+    ]);
+
+    const catSet = new Set(costCategories.map(c => c.toLowerCase()));
+
+    // Top-level cost centres = keys in childrenMap that are not cost categories
+    const allProjects = [...ccMonthly.keys()].filter(name => !catSet.has(name.toLowerCase()));
+
+    const result = [];
+    for (const projectName of allProjects) {
+        const children    = (childrenMap[projectName] || []).filter(c => !catSet.has(c.toLowerCase()));
+        const namesToShow = [projectName, ...children];
+        const items       = [];
+        for (const name of namesToShow) {
+            const monthlyMap = ccMonthly.get(name) || {};
+            const data = buildMonthlyData(monthlyMap, fyStart);
+            if (data.grandDebit > 0 || data.grandCredit > 0) {
+                items.push({ name, ...data });
+            }
+        }
+        if (items.length > 0) result.push({ project: projectName, from, to, items });
+    }
+    return result;
+};
+
+// ─── Pre-warm cache only (no response data needed) ───────────────────────────
+exports.warmFYCache = async (from) => {
+    const fyStart = parseInt(from.substring(0, 4), 10);
+    await fetchFYMonthlyData(fyStart);
+};
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 exports.fetchProjectExpand = async (projectName, from, to) => {

@@ -83,14 +83,20 @@ function ErrorBox({ message }) {
 }
 
 export default function App() {
-  const [fyLabel, setFyLabel] = useState('...')
-  const [sections, setSections] = useState([])
+  const [fyLabel, setFyLabel]         = useState('...')
+  const [companyName, setCompanyName] = useState('')
+  const [sections, setSections]       = useState([])
   const [tallyConnected, setTallyConnected] = useState(null) // null = checking
 
   useEffect(() => {
     fetch('/api/dashboard/config')
       .then(r => r.json())
-      .then(res => { if (res.success) setFyLabel(res.data.fyLabel) })
+      .then(res => {
+        if (res.success) {
+          setFyLabel(res.data.fyLabel)
+          setCompanyName(res.data.companyName || '')
+        }
+      })
       .catch(() => setFyLabel('—'))
 
     fetch('/api/dashboard/sections')
