@@ -1,24 +1,32 @@
 const axios = require('axios');
 
-// Tally ERP 9 handles only ONE HTTP request at a time.
-// All calls are serialized through this queue to prevent simultaneous requests crashing Tally.
-let _tallyBusy = false;
-const _tallyQueue = [];
+const DEFAULT_URL = process.env.TALLY_URL || 'http://localhost:9000';
 
-function _dequeue() {
-  if (_tallyBusy || _tallyQueue.length === 0) return;
-  _tallyBusy = true;
-  const { xml, resolve, reject, timeout } = _tallyQueue.shift();
-  _doCallTally(xml, timeout).then(resolve, reject).finally(() => {
-    _tallyBusy = false;
-    _dequeue();
+// Tally ERP 9 handles only ONE HTTP request at a time.
+// Per-URL queues: each Tally instance gets its own serialized queue so two
+// users on different Tally instances can run concurrently without blocking each other.
+const _queues = new Map();
+
+function _getQueue(url) {
+  if (!_queues.has(url)) _queues.set(url, { busy: false, queue: [] });
+  return _queues.get(url);
+}
+
+function _dequeue(tallyUrl) {
+  const q = _getQueue(tallyUrl);
+  if (q.busy || q.queue.length === 0) return;
+  q.busy = true;
+  const { xml, resolve, reject, timeout } = q.queue.shift();
+  _doCallTally(xml, timeout, tallyUrl).then(resolve, reject).finally(() => {
+    q.busy = false;
+    _dequeue(tallyUrl);
   });
 }
 
-async function _doCallTally(xml, timeout = 35000) {
+async function _doCallTally(xml, timeout = 35000, tallyUrl) {
   let res;
   try {
-    res = await axios.post(process.env.TALLY_URL, xml, {
+    res = await axios.post(tallyUrl, xml, {
       headers: { 'Content-Type': 'text/xml' },
       timeout
     });
@@ -34,10 +42,11 @@ async function _doCallTally(xml, timeout = 35000) {
   return res.data;
 }
 
-exports.callTally = (xml, timeout = 35000) => {
+exports.callTally = (xml, timeout = 35000, tallyUrl = DEFAULT_URL) => {
   return new Promise((resolve, reject) => {
-    _tallyQueue.push({ xml, resolve, reject, timeout });
-    _dequeue();
+    const q = _getQueue(tallyUrl);
+    q.queue.push({ xml, resolve, reject, timeout });
+    _dequeue(tallyUrl);
   });
 };
 
@@ -67,8 +76,8 @@ const COST_CATEGORIES_XML = `<ENVELOPE>
   </BODY>
 </ENVELOPE>`;
 
-exports.fetchCostCategories = async () => {
-  const raw = await exports.callTally(COST_CATEGORIES_XML);
+exports.fetchCostCategories = async (tallyUrl = DEFAULT_URL) => {
+  const raw = await exports.callTally(COST_CATEGORIES_XML, 35000, tallyUrl);
   const matches = [...raw.matchAll(/COSTCATEGORY NAME="([^"]+)"/g)];
   return matches.map(m => decodeXml(m[1]));
 };
@@ -101,12 +110,10 @@ const CURRENT_PERIOD_XML = `<ENVELOPE>
   </BODY>
 </ENVELOPE>`;
 
-// Cache the period so multiple endpoints don't hit Tally on every page load
-let _periodCache = null;
-let _periodCacheTime = 0;
+// Per-URL period caches — each Tally instance has independent cache entries
+const _periodCaches    = new Map(); // url → { result, time }
+const _periodInflights = new Map(); // url → Promise
 const PERIOD_CACHE_TTL = 30 * 1000; // 30 seconds — short enough that switching year in Tally reflects on next refresh
-// In-flight promise lock — prevents multiple simultaneous Tally calls for the same period XML
-let _periodInflight = null;
 
 const MONTHS = { Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12 };
 
@@ -131,22 +138,26 @@ function parseDateStr(s) {
   return null;
 }
 
-exports.clearPeriodCache = () => {
-    _periodCache    = null;
-    _periodCacheTime = 0;
+exports.clearPeriodCache = (tallyUrl) => {
+    if (tallyUrl) {
+        _periodCaches.delete(tallyUrl);
+    } else {
+        _periodCaches.clear();
+    }
 };
 
-exports.fetchCurrentPeriod = async () => {
-  if (_periodCache && (Date.now() - _periodCacheTime) < PERIOD_CACHE_TTL) {
-    return _periodCache;
+exports.fetchCurrentPeriod = async (tallyUrl = DEFAULT_URL) => {
+  const cached = _periodCaches.get(tallyUrl);
+  if (cached && (Date.now() - cached.time) < PERIOD_CACHE_TTL) {
+    return cached.result;
   }
 
-  // If another call is already in-flight, wait for it instead of making a duplicate Tally request
-  if (_periodInflight) return _periodInflight;
+  // If another call is already in-flight for this URL, wait for it instead of making a duplicate Tally request
+  if (_periodInflights.has(tallyUrl)) return _periodInflights.get(tallyUrl);
 
-  _periodInflight = (async () => {
+  const inflight = (async () => {
     try {
-      const raw = await exports.callTally(CURRENT_PERIOD_XML);
+      const raw = await exports.callTally(CURRENT_PERIOD_XML, 35000, tallyUrl);
       console.log('[fetchCurrentPeriod] raw[0-600]:', raw.substring(0, 600));
       console.log('[fetchCurrentPeriod] raw[1000-2000]:', raw.substring(1000, 2000));
 
@@ -184,14 +195,14 @@ exports.fetchCurrentPeriod = async () => {
 
       // Only cache a valid (non-empty) result so a bad Tally response doesn't poison the cache
       if (result.from) {
-        _periodCache = result;
-        _periodCacheTime = Date.now();
+        _periodCaches.set(tallyUrl, { result, time: Date.now() });
       }
       return result;
     } finally {
-      _periodInflight = null;
+      _periodInflights.delete(tallyUrl);
     }
   })();
 
-  return _periodInflight;
+  _periodInflights.set(tallyUrl, inflight);
+  return inflight;
 };

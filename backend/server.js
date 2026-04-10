@@ -4,11 +4,13 @@ const cors = require('cors');
 
 const routes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
+const tallyResolver = require('./middleware/tallyResolver');
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(tallyResolver);
 
 app.use('/api', routes);
 

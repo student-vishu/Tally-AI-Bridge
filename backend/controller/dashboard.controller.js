@@ -15,7 +15,8 @@ function currentFYStartYear(date = new Date()) {
 
 exports.getCompanyCashFlow = async (req, res, next) => {
     try {
-        const period = await fetchCurrentPeriod();
+        const { tallyUrl } = req;
+        const period = await fetchCurrentPeriod(tallyUrl);
 
         // Allow caller to override year: ?fy=2022 → FY 2022-23 (Apr 2022 – Mar 2023)
         const fyParam = req.query.fy ? parseInt(req.query.fy, 10) : null;
@@ -30,7 +31,7 @@ exports.getCompanyCashFlow = async (req, res, next) => {
 
         if (!from) return res.json({ success: true, data: { ledgers: [] } });
 
-        const result = await fetchBankCashData(from, to);
+        const result = await fetchBankCashData(from, to, tallyUrl);
         res.json({ success: true, data: result });
     } catch (err) {
         next(err);
@@ -39,7 +40,8 @@ exports.getCompanyCashFlow = async (req, res, next) => {
 
 exports.getConfig = async (req, res, next) => {
     try {
-        const period = await fetchCurrentPeriod();
+        const { tallyUrl } = req;
+        const period = await fetchCurrentPeriod(tallyUrl);
         const booksFromYear = period.booksFromYear;
         const latestFY = currentFYStartYear();
 
@@ -68,9 +70,10 @@ exports.getConfig = async (req, res, next) => {
 
 exports.getProjectCashFlow = async (req, res, next) => {
     try {
+        const { tallyUrl } = req;
         const [costCategories, raw] = await Promise.all([
-            fetchCostCategories(),
-            callTally(buildCostCategorySummaryXML())
+            fetchCostCategories(tallyUrl),
+            callTally(buildCostCategorySummaryXML(), 35000, tallyUrl)
         ]);
         const parsed = parseCostCategorySummaryXML(raw);
         const result = transformFromCostCategorySummary(parsed, costCategories);
@@ -82,10 +85,11 @@ exports.getProjectCashFlow = async (req, res, next) => {
 
 exports.getProjectCashFlowExpand = async (req, res, next) => {
     try {
+        const { tallyUrl } = req;
         const project = req.query.project;
         if (!project) return res.status(400).json({ success: false, error: 'project param required' });
 
-        const period = await fetchCurrentPeriod();
+        const period = await fetchCurrentPeriod(tallyUrl);
         const fyParam = req.query.fy ? parseInt(req.query.fy, 10) : null;
         let from, to;
         if (fyParam && !isNaN(fyParam)) {
@@ -98,7 +102,7 @@ exports.getProjectCashFlowExpand = async (req, res, next) => {
 
         if (!from) return res.json({ success: true, data: { project, items: [] } });
 
-        const items = await fetchProjectExpand(project, from, to);
+        const items = await fetchProjectExpand(project, from, to, tallyUrl);
         res.json({ success: true, data: { project, from, to, items } });
     } catch (err) {
         next(err);
@@ -107,7 +111,8 @@ exports.getProjectCashFlowExpand = async (req, res, next) => {
 
 exports.getAllProjectsExpand = async (req, res, next) => {
     try {
-        const period = await fetchCurrentPeriod();
+        const { tallyUrl } = req;
+        const period = await fetchCurrentPeriod(tallyUrl);
         const fyParam = req.query.fy ? parseInt(req.query.fy, 10) : null;
         let from, to;
         if (fyParam && !isNaN(fyParam)) {
@@ -118,7 +123,7 @@ exports.getAllProjectsExpand = async (req, res, next) => {
             to   = period.to;
         }
         if (!from) return res.json({ success: true, data: { projects: [] } });
-        const projects = await fetchAllProjectsExpand(from, to);
+        const projects = await fetchAllProjectsExpand(from, to, tallyUrl);
         res.json({ success: true, data: { from, to, projects } });
     } catch (err) {
         next(err);
@@ -127,9 +132,10 @@ exports.getAllProjectsExpand = async (req, res, next) => {
 
 exports.warmCache = async (req, res, next) => {
     try {
-        const period = await fetchCurrentPeriod();
+        const { tallyUrl } = req;
+        const period = await fetchCurrentPeriod(tallyUrl);
         const from   = period.from;
-        if (from) warmFYCache(from).catch(() => {}); // fire-and-forget
+        if (from) warmFYCache(from, tallyUrl).catch(() => {}); // fire-and-forget
         res.json({ success: true });
     } catch (err) {
         next(err);
@@ -144,10 +150,11 @@ const PING_XML = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TA
 
 exports.getCurrentCompany = async (req, res, next) => {
     try {
+        const { tallyUrl } = req;
         // Always fresh — clear cache so company switch in Tally reflects immediately
         const { clearPeriodCache, fetchCurrentPeriod } = require('../services/tally.services');
-        clearPeriodCache();
-        const period = await fetchCurrentPeriod();
+        clearPeriodCache(tallyUrl);
+        const period = await fetchCurrentPeriod(tallyUrl);
         const fyStart = period.booksFromYear || (period.from ? parseInt(period.from.substring(0, 4), 10) : null);
         const fyLabel = fyStart ? `${fyStart}-${String(fyStart + 1).slice(-2)}` : '';
         res.json({ success: true, data: { companyName: period.companyName || '', fyLabel } });
@@ -158,7 +165,7 @@ exports.getCurrentCompany = async (req, res, next) => {
 
 exports.getTallyStatus = async (req, res) => {
     try {
-        await callTally(PING_XML);
+        await callTally(PING_XML, 35000, req.tallyUrl);
         res.json({ success: true, data: { connected: true } });
     } catch {
         res.json({ success: true, data: { connected: false } });
