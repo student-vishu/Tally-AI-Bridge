@@ -2,7 +2,7 @@
 // No SVFROMDATE/SVTODATE — date vars force Tally to recompute OPENINGBALANCE
 // from full transaction history for all 750+ ledgers (timeout >30s).
 // Without date vars, OPENINGBALANCE is read from the ledger master record (fast).
-exports.buildBankCashLedgersXML = () => `
+exports.buildBankCashLedgersXML = (company) => `
 <ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
@@ -13,7 +13,7 @@ exports.buildBankCashLedgersXML = () => `
   <BODY>
     <DESC>
       <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${company ? `\n        <SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY>` : ''}
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
@@ -28,7 +28,7 @@ exports.buildBankCashLedgersXML = () => `
 </ENVELOPE>`;
 
 // Fetch all Tally groups with their parent — used to build the group tree for classification.
-exports.buildGroupsXML = () => `
+exports.buildGroupsXML = (company) => `
 <ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
@@ -39,7 +39,7 @@ exports.buildGroupsXML = () => `
   <BODY>
     <DESC>
       <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${company ? `\n        <SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY>` : ''}
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
@@ -56,7 +56,7 @@ exports.buildGroupsXML = () => `
 // Fetch ALL vouchers for the FY as a collection.
 // Collections don't have the 90-row limit that report-based exports have,
 // so this reliably returns every transaction across all 12 months.
-exports.buildFYVouchersXML = (fromDate, toDate) => `
+exports.buildFYVouchersXML = (fromDate, toDate, company) => `
 <ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
@@ -69,7 +69,7 @@ exports.buildFYVouchersXML = (fromDate, toDate) => `
       <STATICVARIABLES>
         <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
         <SVFROMDATE>${fromDate}</SVFROMDATE>
-        <SVTODATE>${toDate}</SVTODATE>
+        <SVTODATE>${toDate}</SVTODATE>${company ? `\n        <SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY>` : ''}
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>

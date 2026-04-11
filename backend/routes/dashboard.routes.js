@@ -2,10 +2,11 @@ const router = require('express').Router();
 const {
     getCompanyCashFlow, getProjectCashFlow, getProjectCashFlowExpand,
     getAllProjectsExpand, warmCache,
-    getConfig, getSections, getTallyStatus, getCurrentCompany
+    getConfig, getSections, getTallyStatus, getCurrentCompany, getCompanies
 } = require('../controller/dashboard.controller');
 
 router.get('/sections', getSections);
+router.get('/companies', getCompanies);
 router.get('/config', getConfig);
 router.get('/tally-status', getTallyStatus);
 router.get('/current-company', getCurrentCompany);

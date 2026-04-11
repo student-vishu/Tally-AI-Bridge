@@ -9,13 +9,13 @@ const fmt = (value) =>
 
 const fmtAmt = (val) => (val > 0 ? fmt(val) : '—')
 
-export default function ProjectCashFlow({ data }) {
+export default function ProjectCashFlow({ data, queryParams = '' }) {
   const [expandState, setExpandState] = useState({}) // name → 'loading'|'loaded'|'error'
   const [expandData, setExpandData]   = useState({}) // name → { items: [...] }
   const [exporting, setExporting]     = useState(false)
 
   // Pre-warm cache so export is instant when clicked
-  useState(() => { fetch('/api/dashboard/project-cashflow-warm-cache').catch(() => {}) })
+  useState(() => { fetch(`/api/dashboard/project-cashflow-warm-cache${queryParams}`).catch(() => {}) })
 
   async function exportProjectExcel() {
     setExporting(true)
@@ -27,7 +27,7 @@ export default function ProjectCashFlow({ data }) {
         if (cfg.success) { companyName = cfg.data.companyName || ''; fyLabel = cfg.data.fyLabel || '' }
       } catch { /* use empty strings */ }
 
-      const res  = await fetch('/api/dashboard/project-cashflow-all-expand')
+      const res  = await fetch(`/api/dashboard/project-cashflow-all-expand${queryParams}`)
       const json = await res.json()
       if (!json.success) throw new Error('Failed')
 
@@ -130,7 +130,8 @@ export default function ProjectCashFlow({ data }) {
     }
     setExpandState(prev => ({ ...prev, [projectName]: 'loading' }))
     try {
-      const res  = await fetch(`/api/dashboard/project-cashflow-expand?project=${encodeURIComponent(projectName)}`)
+      const sep  = queryParams ? '&' : '?'
+      const res  = await fetch(`/api/dashboard/project-cashflow-expand${queryParams}${sep}project=${encodeURIComponent(projectName)}`)
       const json = await res.json()
       if (!json.success) throw new Error('Server error')
       setExpandData(prev => ({ ...prev, [projectName]: json.data }))

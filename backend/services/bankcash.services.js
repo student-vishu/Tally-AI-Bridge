@@ -70,11 +70,18 @@ function parseOpeningBalance(str) {
     return { amount: Math.abs(val), isDr: val < 0 };
 }
 
-function getFYMonthKeys(fromDate) {
-    const fyStart = parseInt(fromDate.substring(0, 4), 10);
+function getDateRangeMonthKeys(fromDate, toDate) {
+    const fromYear  = parseInt(fromDate.substring(0, 4), 10);
+    const fromMonth = parseInt(fromDate.substring(4, 6), 10);
+    const toYear    = parseInt(toDate.substring(0, 4), 10);
+    const toMonth   = parseInt(toDate.substring(4, 6), 10);
     const keys = [];
-    for (let m = 4; m <= 12; m++) keys.push(`${fyStart}${String(m).padStart(2, '0')}`);
-    for (let m = 1; m <= 3; m++)  keys.push(`${fyStart + 1}${String(m).padStart(2, '0')}`);
+    let y = fromYear, m = fromMonth;
+    while (y < toYear || (y === toYear && m <= toMonth)) {
+        keys.push(`${y}${String(m).padStart(2, '0')}`);
+        m++;
+        if (m > 12) { m = 1; y++; }
+    }
     return keys;
 }
 
@@ -178,10 +185,10 @@ function parseVoucherCollection(raw, bankCashLedgers, ledgerGroupMap, groupParen
 
 // ---------------------------------------------------------------------------
 
-exports.fetchBankCashData = async (fromDate, toDate, tallyUrl) => {
-    console.log('[BankCash] Fetching', fromDate, '->', toDate);
+exports.fetchBankCashData = async (fromDate, toDate, tallyUrl, company = null) => {
+    console.log('[BankCash] Fetching', fromDate, '->', toDate, company ? `company=${company}` : '');
 
-    const ledgersRaw = await callTally(buildBankCashLedgersXML(), 35000, tallyUrl);
+    const ledgersRaw = await callTally(buildBankCashLedgersXML(company), 35000, tallyUrl);
 
     const BANK_CASH_GROUPS = new Set(['Bank Accounts', 'Cash-in-Hand']);
     const ledgerMatches = [...ledgersRaw.matchAll(/<LEDGER NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/g)];
@@ -210,7 +217,7 @@ exports.fetchBankCashData = async (fromDate, toDate, tallyUrl) => {
     if (!bankCashNames.length) return { ledgers: [] };
 
     // Fetch group parent tree — enables resolving custom groups to primary groups
-    const groupsRaw = await callTally(buildGroupsXML(), 35000, tallyUrl);
+    const groupsRaw = await callTally(buildGroupsXML(company), 35000, tallyUrl);
     const groupParentMap = {};
     for (const m of groupsRaw.matchAll(/<GROUP NAME="([^"]+)"[^>]*>([\s\S]*?)<\/GROUP>/g)) {
         const parentMatch = m[2].match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
@@ -218,10 +225,10 @@ exports.fetchBankCashData = async (fromDate, toDate, tallyUrl) => {
     }
     console.log('[BankCash] Groups fetched:', Object.keys(groupParentMap).length);
 
-    const vouchersRaw = await callTally(buildFYVouchersXML(fromDate, toDate), 35000, tallyUrl);
+    const vouchersRaw = await callTally(buildFYVouchersXML(fromDate, toDate, company), 35000, tallyUrl);
     const monthData   = parseVoucherCollection(vouchersRaw, bankCashNames, allLedgerGroupMap, groupParentMap);
 
-    const fyMonthKeys = getFYMonthKeys(fromDate);
+    const fyMonthKeys = getDateRangeMonthKeys(fromDate, toDate);
 
     const ledgers = bankCashNames.map(name => {
         const l = ledgerMap[name];

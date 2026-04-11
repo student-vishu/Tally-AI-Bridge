@@ -53,7 +53,8 @@ exports.callTally = (xml, timeout = 35000, tallyUrl = DEFAULT_URL) => {
 const decodeXml = s => s.replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 exports.decodeXml = decodeXml;
 
-const COST_CATEGORIES_XML = `<ENVELOPE>
+function buildCostCategoriesXML(company) {
+  return `<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
     <TALLYREQUEST>Export</TALLYREQUEST>
@@ -63,7 +64,7 @@ const COST_CATEGORIES_XML = `<ENVELOPE>
   <BODY>
     <DESC>
       <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${company ? `\n        <SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY>` : ''}
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
@@ -75,11 +76,46 @@ const COST_CATEGORIES_XML = `<ENVELOPE>
     </DESC>
   </BODY>
 </ENVELOPE>`;
+}
 
-exports.fetchCostCategories = async (tallyUrl = DEFAULT_URL) => {
-  const raw = await exports.callTally(COST_CATEGORIES_XML, 35000, tallyUrl);
+exports.fetchCostCategories = async (tallyUrl = DEFAULT_URL, company = null) => {
+  const raw = await exports.callTally(buildCostCategoriesXML(company), 35000, tallyUrl);
   const matches = [...raw.matchAll(/COSTCATEGORY NAME="([^"]+)"/g)];
   return matches.map(m => decodeXml(m[1]));
+};
+
+// Fetch the company's fixed BOOKSFROM date (when books were started) — NOT the currently selected period.
+// This is stored in the Company master and never changes with period selection.
+function buildCompanyBooksFromXML(company) {
+  return `<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>CompanyBooksFrom</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${company ? `\n        <SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY>` : ''}
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="CompanyBooksFrom">
+            <TYPE>Company</TYPE>
+            <FETCH>NAME, BOOKSFROM</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+}
+
+exports.fetchCompanyBooksFrom = async (tallyUrl = DEFAULT_URL, company = null) => {
+  const raw = await exports.callTally(buildCompanyBooksFromXML(company), 35000, tallyUrl);
+  const booksFromStr = raw.match(/<BOOKSFROM[^>]*>([^<]+)<\/BOOKSFROM>/i)?.[1]?.trim() || '';
+  return parseDateStr(booksFromStr); // returns FY start year (e.g. 2022) or null
 };
 
 // Collection + COMPUTE to expose ##SVFROMDATE / ##SVTODATE (Tally ERP 9 compatible).

@@ -53,15 +53,16 @@ function fyMonthRanges(fyStart) {
     });
 }
 
-// ─── Cost-centre hierarchy cache (per Tally URL) ──────────────────────────────
-const _hierCaches = new Map(); // url → { data, time }
+// ─── Cost-centre hierarchy cache (per Tally URL + company) ───────────────────
+const _hierCaches = new Map(); // `${tallyUrl}::${company}` → { data, time }
 const HIER_TTL    = 5 * 60 * 1000;
 
-async function fetchCostCentreHierarchy(tallyUrl) {
-    const cached = _hierCaches.get(tallyUrl);
+async function fetchCostCentreHierarchy(tallyUrl, company = null) {
+    const cacheKey = `${tallyUrl}::${company || ''}`;
+    const cached = _hierCaches.get(cacheKey);
     if (cached && (Date.now() - cached.time) < HIER_TTL) return cached.data;
 
-    const raw = await callTally(buildCostCentreHierarchyXML(), 35000, tallyUrl);
+    const raw = await callTally(buildCostCentreHierarchyXML(company), 35000, tallyUrl);
     const childrenMap = {};
     const parentMap   = {};
 
@@ -76,7 +77,7 @@ async function fetchCostCentreHierarchy(tallyUrl) {
         }
     }
 
-    _hierCaches.set(tallyUrl, { data: { childrenMap, parentMap }, time: Date.now() });
+    _hierCaches.set(`${tallyUrl}::${company || ''}`, { data: { childrenMap, parentMap }, time: Date.now() });
     return { childrenMap, parentMap };
 }
 
@@ -146,13 +147,13 @@ function applyReliabilityFilter(rawMonthly, yearDebit, yearCredit) {
     return result;
 }
 
-// ─── FY-level monthly CC data cache (per Tally URL) ──────────────────────────
-const _cbCaches    = new Map(); // `${tallyUrl}::${fyStart}` → { data, time }
+// ─── FY-level monthly CC data cache (per Tally URL + company) ────────────────
+const _cbCaches    = new Map(); // `${tallyUrl}::${fyStart}::${company}` → { data, time }
 const _cbInflights = new Map(); // same key → Promise
 const CB_TTL       = 5 * 60 * 1000;
 
-async function fetchFYMonthlyData(fyStart, tallyUrl) {
-    const cacheKey = `${tallyUrl}::${fyStart}`;
+async function fetchFYMonthlyData(fyStart, tallyUrl, company = null) {
+    const cacheKey = `${tallyUrl}::${fyStart}::${company || ''}`;
     const cached = _cbCaches.get(cacheKey);
     if (cached && (Date.now() - cached.time) < CB_TTL) {
         return cached.data;
@@ -161,7 +162,7 @@ async function fetchFYMonthlyData(fyStart, tallyUrl) {
 
     const inflight = (async () => {
         try {
-            return await _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl);
+            return await _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl, company);
         } finally {
             _cbInflights.delete(cacheKey);
         }
@@ -170,7 +171,7 @@ async function fetchFYMonthlyData(fyStart, tallyUrl) {
     return inflight;
 }
 
-async function _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl) {
+async function _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl, company = null) {
     const fyFrom = `${fyStart}0401`;
     const fyTo   = `${fyStart + 1}0331`;
     const ranges = fyMonthRanges(fyStart);
@@ -178,7 +179,7 @@ async function _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl) {
     console.log(`[CostCentre] Cost Category Summary FY ${fyStart} — 13 calls (1 annual + 12 monthly)`);
 
     // Full-year totals — used as reference for the reliability filter fallback
-    const yearXml = await callTally(buildCostCategorySummaryMonthXML(fyFrom, fyTo), 30000, tallyUrl);
+    const yearXml = await callTally(buildCostCategorySummaryMonthXML(fyFrom, fyTo, company), 30000, tallyUrl);
     const yearMap = parseCCSummaryToMap(yearXml);
     console.log(`[CostCentre] annual snapshot: ${yearMap.size} cost centres`);
 
@@ -188,7 +189,7 @@ async function _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl) {
     for (let i = 0; i < ranges.length; i++) {
         const { mk, from, to } = ranges[i];
         console.log(`[CCS] month ${i + 1}/12 ${mk} → ${from}–${to}`);
-        const xml = await callTally(buildCostCategorySummaryMonthXML(from, to), 30000, tallyUrl);
+        const xml = await callTally(buildCostCategorySummaryMonthXML(from, to, company), 30000, tallyUrl);
         snaps.set(mk, parseCCSummaryToMap(xml));
     }
 
@@ -239,11 +240,15 @@ async function _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl) {
 }
 
 // ─── Build month rows for one cost centre ────────────────────────────────────
-function buildMonthlyData(monthlyMap, fyStart) {
+function buildMonthlyData(monthlyMap, fyStart, from, to) {
     const months = [];
     let running = 0, grandDebit = 0, grandCredit = 0;
+    const fromKey = from ? from.substring(0, 6) : null;
+    const toKey   = to   ? to.substring(0, 6)   : null;
 
     for (const mk of fyMonthKeys(fyStart)) {
+        if (fromKey && mk < fromKey) continue;
+        if (toKey   && mk > toKey)   continue;
         const { debit = 0, credit = 0 } = monthlyMap[mk] || {};
         if (debit === 0 && credit === 0) continue;
 
@@ -267,13 +272,15 @@ function buildMonthlyData(monthlyMap, fyStart) {
 }
 
 // ─── All projects expand (single call, shared cache) ─────────────────────────
-exports.fetchAllProjectsExpand = async (from, to, tallyUrl) => {
-    const fyStart = parseInt(from.substring(0, 4), 10);
+exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
+    const year = parseInt(from.substring(0, 4), 10);
+    const month = parseInt(from.substring(4, 6), 10);
+    const fyStart = month >= 4 ? year : year - 1;
 
     const [{ childrenMap }, costCategories, ccMonthly] = await Promise.all([
-        fetchCostCentreHierarchy(tallyUrl),
-        fetchCostCategories(tallyUrl),
-        fetchFYMonthlyData(fyStart, tallyUrl)
+        fetchCostCentreHierarchy(tallyUrl, company),
+        fetchCostCategories(tallyUrl, company),
+        fetchFYMonthlyData(fyStart, tallyUrl, company)
     ]);
 
     const catSet = new Set(costCategories.map(c => c.toLowerCase()));
@@ -288,7 +295,7 @@ exports.fetchAllProjectsExpand = async (from, to, tallyUrl) => {
         const items       = [];
         for (const name of namesToShow) {
             const monthlyMap = ccMonthly.get(name) || {};
-            const data = buildMonthlyData(monthlyMap, fyStart);
+            const data = buildMonthlyData(monthlyMap, fyStart, from, to);
             if (data.grandDebit > 0 || data.grandCredit > 0) {
                 items.push({ name, ...data });
             }
@@ -299,19 +306,23 @@ exports.fetchAllProjectsExpand = async (from, to, tallyUrl) => {
 };
 
 // ─── Pre-warm cache only (no response data needed) ───────────────────────────
-exports.warmFYCache = async (from, tallyUrl) => {
-    const fyStart = parseInt(from.substring(0, 4), 10);
-    await fetchFYMonthlyData(fyStart, tallyUrl);
+exports.warmFYCache = async (from, tallyUrl, company = null) => {
+    const year = parseInt(from.substring(0, 4), 10);
+    const month = parseInt(from.substring(4, 6), 10);
+    const fyStart = month >= 4 ? year : year - 1;
+    await fetchFYMonthlyData(fyStart, tallyUrl, company);
 };
 
 // ─── Main export ──────────────────────────────────────────────────────────────
-exports.fetchProjectExpand = async (projectName, from, to, tallyUrl) => {
-    const fyStart = parseInt(from.substring(0, 4), 10);
+exports.fetchProjectExpand = async (projectName, from, to, tallyUrl, company = null) => {
+    const year = parseInt(from.substring(0, 4), 10);
+    const month = parseInt(from.substring(4, 6), 10);
+    const fyStart = month >= 4 ? year : year - 1;
 
     const [{ childrenMap }, costCategories, ccMonthly] = await Promise.all([
-        fetchCostCentreHierarchy(tallyUrl),
-        fetchCostCategories(tallyUrl),
-        fetchFYMonthlyData(fyStart, tallyUrl)
+        fetchCostCentreHierarchy(tallyUrl, company),
+        fetchCostCategories(tallyUrl, company),
+        fetchFYMonthlyData(fyStart, tallyUrl, company)
     ]);
 
     const catSet      = new Set(costCategories.map(c => c.toLowerCase()));
@@ -321,7 +332,7 @@ exports.fetchProjectExpand = async (projectName, from, to, tallyUrl) => {
     const items = [];
     for (const name of namesToShow) {
         const monthlyMap = ccMonthly.get(name) || {};
-        const data = buildMonthlyData(monthlyMap, fyStart);
+        const data = buildMonthlyData(monthlyMap, fyStart, from, to);
         if (data.grandDebit > 0 || data.grandCredit > 0) {
             items.push({ name, ...data });
         }

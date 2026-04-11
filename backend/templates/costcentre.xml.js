@@ -1,5 +1,5 @@
 // Fetch all cost centres with their PARENT field — used to build the parent-child hierarchy.
-exports.buildCostCentreHierarchyXML = () => `<ENVELOPE>
+exports.buildCostCentreHierarchyXML = (company) => `<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
     <TALLYREQUEST>Export</TALLYREQUEST>
@@ -9,7 +9,7 @@ exports.buildCostCentreHierarchyXML = () => `<ENVELOPE>
   <BODY>
     <DESC>
       <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${company ? `\n        <SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY>` : ''}
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
