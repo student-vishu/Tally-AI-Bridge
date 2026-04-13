@@ -150,11 +150,15 @@ function parseVoucherCollection(raw, bankCashLedgers, ledgerGroupMap, groupParen
             const catMap = monthData[entry.ledger][monthKey].entries.debit;
 
             for (const cp of nonBankCrEntries) {
-                const cat = resolveCategory(cp.ledger, ledgerGroupMap[cp.ledger] || '', groupParentMap);
-                catMap[cat][cp.ledger] = (catMap[cat][cp.ledger] || 0) + cp.amount * share;
+                const cat    = resolveCategory(cp.ledger, ledgerGroupMap[cp.ledger] || '', groupParentMap);
+                const subGrp = ledgerGroupMap[cp.ledger] || cp.ledger;
+                if (!catMap[cat][subGrp]) catMap[cat][subGrp] = {};
+                catMap[cat][subGrp][cp.ledger] = (catMap[cat][subGrp][cp.ledger] || 0) + cp.amount * share;
             }
             for (const cp of bankCrEntries) {
-                catMap['Transfer'][cp.ledger] = (catMap['Transfer'][cp.ledger] || 0) + cp.amount * share;
+                const subGrp = ledgerGroupMap[cp.ledger] || cp.ledger;
+                if (!catMap['Transfer'][subGrp]) catMap['Transfer'][subGrp] = {};
+                catMap['Transfer'][subGrp][cp.ledger] = (catMap['Transfer'][subGrp][cp.ledger] || 0) + cp.amount * share;
             }
         }
 
@@ -170,11 +174,15 @@ function parseVoucherCollection(raw, bankCashLedgers, ledgerGroupMap, groupParen
             const catMap = monthData[entry.ledger][monthKey].entries.credit;
 
             for (const cp of nonBankDrEntries) {
-                const cat = resolveCategory(cp.ledger, ledgerGroupMap[cp.ledger] || '', groupParentMap);
-                catMap[cat][cp.ledger] = (catMap[cat][cp.ledger] || 0) + cp.amount * share;
+                const cat    = resolveCategory(cp.ledger, ledgerGroupMap[cp.ledger] || '', groupParentMap);
+                const subGrp = ledgerGroupMap[cp.ledger] || cp.ledger;
+                if (!catMap[cat][subGrp]) catMap[cat][subGrp] = {};
+                catMap[cat][subGrp][cp.ledger] = (catMap[cat][subGrp][cp.ledger] || 0) + cp.amount * share;
             }
             for (const cp of bankDrEntries) {
-                catMap['Transfer'][cp.ledger] = (catMap['Transfer'][cp.ledger] || 0) + cp.amount * share;
+                const subGrp = ledgerGroupMap[cp.ledger] || cp.ledger;
+                if (!catMap['Transfer'][subGrp]) catMap['Transfer'][subGrp] = {};
+                catMap['Transfer'][subGrp][cp.ledger] = (catMap['Transfer'][subGrp][cp.ledger] || 0) + cp.amount * share;
             }
         }
     }

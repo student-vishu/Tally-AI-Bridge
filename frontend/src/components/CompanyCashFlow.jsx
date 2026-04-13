@@ -27,8 +27,9 @@ function CategoryCards({ sideEntries }) {
   return (
     <div className="mdc-side-cards">
       {active.map(cat => {
-        const rows  = Object.entries(sideEntries[cat.key])
-        const total = rows.reduce((s, [, v]) => s + v, 0)
+        const subGroups = Object.entries(sideEntries[cat.key])
+        const total = subGroups.reduce((s, [, ledgers]) =>
+          s + Object.values(ledgers).reduce((a, b) => a + b, 0), 0)
         return (
           <div
             key={cat.key}
@@ -40,12 +41,23 @@ function CategoryCards({ sideEntries }) {
               {cat.label}
             </div>
             <div className="mdc-rows">
-              {rows.map(([name, amount]) => (
-                <div key={name} className="mdc-row">
-                  <span className="mdc-name" title={name}>{name}</span>
-                  <span className="mdc-amt">{formatINR(amount)}</span>
-                </div>
-              ))}
+              {subGroups.map(([subGrp, ledgers]) => {
+                const subTotal = Object.values(ledgers).reduce((a, b) => a + b, 0)
+                return (
+                  <div key={subGrp} className="mdc-subgroup">
+                    <div className="mdc-subgroup-header">
+                      <span className="mdc-subgroup-name">{subGrp}</span>
+                      <span className="mdc-subgroup-total">{formatINR(subTotal)}</span>
+                    </div>
+                    {Object.entries(ledgers).map(([ledger, amt]) => (
+                      <div key={ledger} className="mdc-row">
+                        <span className="mdc-name" title={ledger}>{ledger}</span>
+                        <span className="mdc-amt">{formatINR(amt)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
             </div>
             <div className="mdc-total">
               <span>{cat.totalLabel}</span>
@@ -208,8 +220,11 @@ function mergeEntries(banks, monthLabel) {
     for (const side of ['debit', 'credit']) {
       for (const cat of CATEGORIES) {
         const src = m.entries[side]?.[cat.key] || {}
-        for (const [name, amt] of Object.entries(src)) {
-          result[side][cat.key][name] = (result[side][cat.key][name] || 0) + amt
+        for (const [subGrp, ledgers] of Object.entries(src)) {
+          if (!result[side][cat.key][subGrp]) result[side][cat.key][subGrp] = {}
+          for (const [name, amt] of Object.entries(ledgers)) {
+            result[side][cat.key][subGrp][name] = (result[side][cat.key][subGrp][name] || 0) + amt
+          }
         }
       }
     }
@@ -224,6 +239,36 @@ const CAT_LABELS = {
 }
 const CAT_KEYS = ['Income', 'Expense', 'Asset', 'Liability', 'Transfer']
 
+// Category order per sheet
+const IN_CAT_ORDER  = ['Asset', 'Liability', 'Transfer', 'Expense', 'Income']
+const OUT_CAT_ORDER = ['Liability', 'Expense', 'Asset', 'Transfer', 'Income']
+
+// Sub-group priority per sheet (case-insensitive substring match)
+const IN_SUBGROUP_PRIORITY = {
+  Asset:     ['sundry debtors'],
+  Liability: ['sundry creditors', 'indirect income'],
+}
+const OUT_SUBGROUP_PRIORITY = {
+  Liability: ['sundry creditors', 'provisions'],
+  Expense:   ['salary', 'indirect expense', 'administrative', 'stationery'],
+  Asset:     ['sundry debtors', 'silk'],
+}
+
+function sortedSubGroups(subGrpSet, catKey, side) {
+  const map = side === 'debit' ? IN_SUBGROUP_PRIORITY : OUT_SUBGROUP_PRIORITY
+  const priorities = map[catKey] || []
+  return [...subGrpSet].sort((a, b) => {
+    const al = a.toLowerCase()
+    const bl = b.toLowerCase()
+    const ai = priorities.findIndex(p => al.includes(p))
+    const bi = priorities.findIndex(p => bl.includes(p))
+    if (ai === -1 && bi === -1) return al.localeCompare(bl)
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
+}
+
 function applyStyle(cell, { bg, color, bold, border } = {}) {
   if (bg)    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + bg } }
   cell.font = { name: 'Arial', bold: !!bold, ...(color ? { color: { argb: 'FF' + color } } : {}) }
@@ -236,6 +281,8 @@ function applyStyle(cell, { bg, color, bold, border } = {}) {
 
 function buildInOutSheet(wb, banks, months, side, sheetName) {
   const ws = wb.addWorksheet(sheetName)
+  // Summary rows (category totals) appear ABOVE their detail — collapse button on category header
+  ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false }
   ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1, topLeftCell: 'B2' }]
   ws.getColumn(1).width = 35
   months.forEach((_, i) => { ws.getColumn(i + 2).width = 14 })
@@ -248,32 +295,50 @@ function buildInOutSheet(wb, banks, months, side, sheetName) {
   // Pre-compute merged entries per month (avoid recomputing in loops)
   const mergedPerMonth = months.map(ml => mergeEntries(banks, ml))
 
-  for (const catKey of CAT_KEYS) {
-    const nameSet = new Set()
-    mergedPerMonth.forEach(m => Object.keys(m[side][catKey] || {}).forEach(n => nameSet.add(n)))
-    if (nameSet.size === 0) continue
+  const catOrder = side === 'debit' ? IN_CAT_ORDER : OUT_CAT_ORDER
 
-    // Category header — green
-    const catRow = ws.addRow([CAT_LABELS[catKey]])
-    catRow.eachCell(c => applyStyle(c, { bg: '92D050', bold: true, border: true }))
+  for (const catKey of catOrder) {
+    // Collect all sub-groups across all months
+    const subGrpSet = new Set()
+    mergedPerMonth.forEach(m => Object.keys(m[side][catKey] || {}).forEach(sg => subGrpSet.add(sg)))
+    if (subGrpSet.size === 0) continue
 
-    // Entry rows
-    for (const name of nameSet) {
-      let total = 0
-      const amts = mergedPerMonth.map(m => {
-        const v = m[side][catKey][name] || 0; total += v; return v || ''
-      })
-      ws.addRow([name, ...amts, total || '']).eachCell(c => applyStyle(c, { border: true }))
-    }
-
-    // Total row — yellow
+    // Category total row — yellow (placed FIRST so Excel collapse button sits here)
     let catTotal = 0
     const catTotals = mergedPerMonth.map(m => {
-      const s = Object.values(m[side][catKey] || {}).reduce((a, b) => a + b, 0)
+      const s = Object.values(m[side][catKey] || {}).reduce((a, subLedgers) =>
+        a + Object.values(subLedgers).reduce((x, y) => x + y, 0), 0)
       catTotal += s; return s || ''
     })
-    ws.addRow([`Total ${CAT_LABELS[catKey]}`, ...catTotals, catTotal || ''])
-      .eachCell(c => applyStyle(c, { bg: 'FFEB9C', bold: true, border: true }))
+    ws.addRow([CAT_LABELS[catKey], ...catTotals, catTotal || ''])
+      .eachCell(c => applyStyle(c, { bg: '92D050', bold: true, border: true }))
+
+    for (const subGrp of sortedSubGroups(subGrpSet, catKey, side)) {
+      // Sub-group total row — light blue (placed FIRST so collapse button sits here)
+      let sgTotal = 0
+      const sgTotals = mergedPerMonth.map(m => {
+        const s = Object.values(m[side][catKey]?.[subGrp] || {}).reduce((a, b) => a + b, 0)
+        sgTotal += s; return s || ''
+      })
+      const sgTotalRow = ws.addRow([`  ${subGrp}`, ...sgTotals, sgTotal || ''])
+      sgTotalRow.eachCell(c => applyStyle(c, { bg: 'D9D9D9', bold: true, border: true }))
+      sgTotalRow.outlineLevel = 1
+
+      // Collect all ledger names within this sub-group
+      const ledgerSet = new Set()
+      mergedPerMonth.forEach(m => Object.keys(m[side][catKey]?.[subGrp] || {}).forEach(l => ledgerSet.add(l)))
+
+      // Ledger rows — deepest level, outline 2
+      for (const ledger of ledgerSet) {
+        let total = 0
+        const amts = mergedPerMonth.map(m => {
+          const v = m[side][catKey]?.[subGrp]?.[ledger] || 0; total += v; return v || ''
+        })
+        const ledgerRow = ws.addRow([`    ${ledger}`, ...amts, total || ''])
+        ledgerRow.eachCell(c => applyStyle(c, { border: true }))
+        ledgerRow.outlineLevel = 2
+      }
+    }
 
     ws.addRow([])
   }

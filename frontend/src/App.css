@@ -761,6 +761,30 @@ body {
   padding: 6px 0;
 }
 
+.mdc-subgroup {
+  margin-bottom: 4px;
+}
+
+.mdc-subgroup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 12px 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--cat-color);
+  border-bottom: 1px solid var(--cat-border);
+  margin-bottom: 2px;
+  opacity: 0.85;
+}
+
+.mdc-subgroup-total {
+  font-variant-numeric: tabular-nums;
+  opacity: 1;
+}
+
 .mdc-row {
   display: flex;
   justify-content: space-between;
