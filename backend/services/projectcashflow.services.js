@@ -329,14 +329,14 @@ exports.fetchProjectExpand = async (projectName, from, to, tallyUrl, company = n
     const children    = (childrenMap[projectName] || []).filter(c => !catSet.has(c.toLowerCase()));
     const namesToShow = [projectName, ...children];
 
-    const items = [];
-    for (const name of namesToShow) {
+    // Include all names from the hierarchy — even those with no data in this period.
+    // Filtering by grandDebit/grandCredit caused children to disappear when they had
+    // no transactions in the selected FY, leaving only the project itself visible.
+    const items = namesToShow.map(name => {
         const monthlyMap = ccMonthly.get(name) || {};
         const data = buildMonthlyData(monthlyMap, fyStart, from, to);
-        if (data.grandDebit > 0 || data.grandCredit > 0) {
-            items.push({ name, ...data });
-        }
-    }
+        return { name, ...data };
+    });
 
     return items;
 };

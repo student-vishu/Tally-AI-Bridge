@@ -870,13 +870,6 @@ body {
   border-bottom: 2px solid #c5cce8;
 }
 
-.project-expand-panel {
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
 .project-expand-empty {
   padding: 14px 20px;
   color: #aaa;
@@ -884,19 +877,65 @@ body {
   font-size: 13px;
 }
 
-.project-subcategory {
-  border: 1px solid #d0d8f0;
-  border-radius: 8px;
-  overflow: hidden;
+/* ── Level-1 summary table ── */
+.proj-sub-panel { padding: 0; }
+
+.proj-sub-summary {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
 
-.project-subcategory-header {
-  background: linear-gradient(90deg, #0f3460, #16213e);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 9px 14px;
+.proj-sub-summary thead th {
+  background: #e8edf4;
+  color: #344;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
   letter-spacing: 0.3px;
+  padding: 8px 14px;
+  text-align: right;
+  border-bottom: 2px solid #c5cfd9;
+}
+.proj-sub-summary thead th.proj-sub-name-col { text-align: left; }
+
+.proj-sub-name-col { width: 34%; text-align: left; }
+.proj-sub-num-col  { width: 22%; text-align: right; }
+
+.proj-sub-row {
+  cursor: pointer;
+  border-bottom: 1px solid #e2e8ef;
+  transition: background 0.12s;
+}
+.proj-sub-row:hover { background: #f0f4f9; }
+.proj-sub-row--open { background: #eaf2ff; font-weight: 600; }
+
+.proj-sub-row td { padding: 8px 14px; vertical-align: middle; }
+
+.proj-sub-toggle {
+  display: inline-block;
+  width: 16px;
+  font-size: 9px;
+  opacity: 0.55;
+  margin-right: 4px;
+}
+
+.proj-sub-dr      { color: #1a5276; font-variant-numeric: tabular-nums; }
+.proj-sub-cr      { color: #6b2a2a; font-variant-numeric: tabular-nums; }
+.proj-sub-closing { font-weight: 600; font-variant-numeric: tabular-nums; color: #0f3460; }
+
+/* ── Level-2 monthly table (inline) ── */
+.proj-sub-detail-row { background: #f4f8ff; }
+.proj-sub-detail-cell {
+  padding: 0 16px 10px 36px !important;
+  border-bottom: 2px solid #c5cfd9;
+}
+
+.proj-monthly-inline {
+  margin: 8px 0 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.09);
 }
 
 .project-monthly-table {
