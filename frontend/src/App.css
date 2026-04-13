@@ -1069,6 +1069,30 @@ body {
   border-radius: 20px;
 }
 
+.led-context-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  padding: 6px 20px 5px;
+  font-size: 11.5px;
+  border-bottom: 1px dashed #ebebeb;
+}
+.led-ctx-dr {
+  color: #1a7a4a;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.led-ctx-cr {
+  color: #b71c1c;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .led-card-loading {
   padding: 10px 20px;
   font-size: 13px;

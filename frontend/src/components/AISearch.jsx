@@ -3,9 +3,57 @@ import { useState, useEffect, useRef } from 'react'
 const FMT = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmt = (amount) => '₹' + FMT.format(amount);
 
+// Returns { dr, cr } labels based on the ledger's direct parent group.
+// Uses exact match first, then substring fallback for custom sub-groups.
+function getGroupLabels(parent) {
+  const p = (parent || '').toLowerCase().trim()
+
+  if (['bank accounts', 'cash-in-hand', 'bank od a/c'].includes(p))
+    return { dr: '⬆️ Money IN',         cr: '⬇️ Money OUT' }
+
+  if (p === 'sales accounts')
+    return { dr: '↩️ Sales Return',      cr: '⬆️ Sales Earned' }
+
+  if (p === 'direct income' || p === 'indirect income' || p.includes('income'))
+    return { dr: '↩️ Income Reduced',    cr: '⬆️ Income Earned' }
+
+  if (p === 'purchase accounts')
+    return { dr: '⬇️ Purchase Made',     cr: '↩️ Purchase Return' }
+
+  if (p === 'direct expenses' || p === 'indirect expenses' || p.includes('expense'))
+    return { dr: '⬇️ Expense Incurred',  cr: '↩️ Expense Reduced' }
+
+  if (p === 'sundry debtors' || p.includes('debtor') || p.includes('receivable'))
+    return { dr: '📋 Invoice Raised',    cr: '⬆️ Payment Received' }
+
+  if (p === 'sundry creditors' || p.includes('creditor') || p.includes('payable'))
+    return { dr: '⬇️ Payment Made',      cr: '📋 Bill Received' }
+
+  if (p === 'secured loans' || p === 'unsecured loans' || p === 'loans (liability)' || p.includes('loan'))
+    return { dr: '⬇️ Loan Repaid',       cr: '⬆️ Loan Received' }
+
+  if (p === 'capital account' || p === 'reserves & surplus' || p.includes('capital'))
+    return { dr: '↩️ Capital Withdrawn', cr: '⬆️ Capital Invested' }
+
+  if (p === 'fixed assets' || p.includes('fixed asset'))
+    return { dr: '⬇️ Asset Purchased',   cr: '↩️ Asset Sold' }
+
+  if (p === 'duties & taxes' || p.includes('tax') || p.includes('duties'))
+    return { dr: '⬇️ Tax Paid',          cr: '⬆️ Tax Payable' }
+
+  if (p.includes('asset') || p.includes('deposit') || p.includes('investment'))
+    return { dr: '⬆️ Asset Increased',   cr: '⬇️ Asset Reduced' }
+
+  if (p.includes('liabilit') || p.includes('provision'))
+    return { dr: '⬇️ Liability Reduced', cr: '⬆️ Liability Increased' }
+
+  return { dr: 'Dr', cr: 'Cr' }
+}
+
 function LedgerCard({ ledger, queryParams }) {
   const [detail, setDetail]     = useState(null)  // null = not fetched, false = failed, object = ok
   const [fetching, setFetching] = useState(false)
+  const labels = getGroupLabels(ledger.parent)
 
   useEffect(() => {
     if (!queryParams) { setDetail(null); return }
@@ -28,6 +76,11 @@ function LedgerCard({ ledger, queryParams }) {
           <span className="led-card-name">{ledger.name}</span>
           {ledger.parent && <span className="led-card-parent">{ledger.parent}</span>}
         </div>
+        <div className="led-context-bar">
+          <span />
+          <span className="led-ctx-dr">Dr → {labels.dr}</span>
+          <span className="led-ctx-cr">Cr → {labels.cr}</span>
+        </div>
         <div className="led-card-prompt">
           Select a company &amp; year above to see transactions
         </div>
@@ -41,6 +94,13 @@ function LedgerCard({ ledger, queryParams }) {
       <div className="led-card-header">
         <span className="led-card-name">{ledger.name}</span>
         {ledger.parent && <span className="led-card-parent">{ledger.parent}</span>}
+      </div>
+
+      {/* ── Context bar ── */}
+      <div className="led-context-bar">
+        <span />
+        <span className="led-ctx-dr">Dr → {labels.dr}</span>
+        <span className="led-ctx-cr">Cr → {labels.cr}</span>
       </div>
 
       {fetching && (
@@ -91,7 +151,7 @@ function LedgerCard({ ledger, queryParams }) {
           <div className="led-totals">
             <div className="led-total-col">
               <div className="led-total-head dr">
-                <span className="led-total-label">Dr Total</span>
+                <span className="led-total-label">{labels.dr}</span>
                 <span className="led-total-amt">{fmt(detail.dr)}</span>
               </div>
               {detail.drGroups.map(g => (
@@ -106,7 +166,7 @@ function LedgerCard({ ledger, queryParams }) {
 
             <div className="led-total-col">
               <div className="led-total-head cr">
-                <span className="led-total-label">Cr Total</span>
+                <span className="led-total-label">{labels.cr}</span>
                 <span className="led-total-amt">{fmt(detail.cr)}</span>
               </div>
               {detail.crGroups.map(g => (
