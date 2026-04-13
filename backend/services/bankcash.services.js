@@ -1,5 +1,5 @@
 const { callTally, decodeXml } = require('./tally.services');
-const { buildBankCashLedgersXML, buildFYVouchersXML, buildGroupsXML } = require('../templates/bankcash.xml');
+const { buildBankCashLedgersXML, buildSingleLedgerOpeningXML, buildFYVouchersXML, buildGroupsXML } = require('../templates/bankcash.xml');
 
 const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
@@ -215,6 +215,25 @@ exports.fetchBankCashData = async (fromDate, toDate, tallyUrl, company = null) =
     const bankCashNames = Object.keys(ledgerMap);
     console.log('[BankCash] Bank/Cash ledgers:', bankCashNames.join(', ') || 'none');
     if (!bankCashNames.length) return { ledgers: [] };
+
+    // Fetch period-specific opening balance for each bank/cash ledger individually.
+    // One small request per ledger (2–5 ledgers) run in parallel — Tally only computes
+    // OB for that one ledger at a time, so it completes instantly without hanging.
+    // Falls back to master OB (already set above) if any individual request fails.
+    await Promise.all(bankCashNames.map(async (name) => {
+        try {
+            const raw = await callTally(buildSingleLedgerOpeningXML(name, fromDate, toDate, company), 15000, tallyUrl);
+            const balMatch = raw.match(/<OPENINGBALANCE[^>]*>([^<]*)<\/OPENINGBALANCE>/);
+            if (balMatch) {
+                const { amount, isDr } = parseOpeningBalance(balMatch[1]);
+                ledgerMap[name].openingBalance = amount;
+                ledgerMap[name].openingDr      = isDr;
+                console.log(`[BankCash] OB for ${name}: ${isDr ? 'Dr' : 'Cr'} ${amount}`);
+            }
+        } catch (e) {
+            console.log(`[BankCash] OB fetch failed for ${name}, using master OB:`, e.message);
+        }
+    }));
 
     // Fetch group parent tree — enables resolving custom groups to primary groups
     const groupsRaw = await callTally(buildGroupsXML(company), 35000, tallyUrl);

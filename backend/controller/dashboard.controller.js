@@ -3,6 +3,7 @@ const { fetchBankCashData } = require('../services/bankcash.services');
 const { fetchProjectExpand, fetchAllProjectsExpand, warmFYCache } = require('../services/projectcashflow.services');
 const SECTIONS_REGISTRY = require('../config/sections.registry');
 const { buildCostCategorySummaryXML } = require('../templates/costcategorysummary.xml');
+const { buildAllLedgersXML, buildFYVouchersXML } = require('../templates/bankcash.xml');
 const { parseCostCategorySummaryXML } = require('../services/parser.services');
 const { transformFromCostCategorySummary } = require('../services/transformer.services');
 
@@ -161,5 +162,197 @@ exports.getTallyStatus = async (req, res) => {
         res.json({ success: true, data: { connected: true } });
     } catch {
         res.json({ success: true, data: { connected: false } });
+    }
+};
+
+// Cache: key = "company|from|to" → { ledgerMap: Map<name,{dr,cr,drGroups,crGroups,months}>, parentMap }
+// Voucher-based Dr/Cr per ledger — avoids CLOSINGBALANCE (unsupported in Tally Prime collections)
+// and avoids TDL FUNCTION filters (also unsupported). Uses the same buildFYVouchersXML that
+// bankcash.services.js already uses successfully.
+const _voucherSummaryCache = new Map();
+const VOUCHER_SUMMARY_TTL  = 5 * 60 * 1000; // 5 minutes
+
+const _MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+function _monthKeys(from, to) {
+    const keys = [];
+    let y = parseInt(from.substring(0, 4)), m = parseInt(from.substring(4, 6));
+    const ey = parseInt(to.substring(0, 4)), em = parseInt(to.substring(4, 6));
+    while (y < ey || (y === ey && m <= em)) {
+        keys.push(`${y}${String(m).padStart(2, '0')}`);
+        m++; if (m > 12) { m = 1; y++; }
+    }
+    return keys;
+}
+
+async function _fetchVoucherSummary(from, to, company, tallyUrl) {
+    const cacheKey = `${company || ''}|${from}|${to}`;
+    const cached = _voucherSummaryCache.get(cacheKey);
+    if (cached && (Date.now() - cached.time) < VOUCHER_SUMMARY_TTL) return cached.data;
+
+    // Fetch vouchers and ledger parents in parallel.
+    // buildAllLedgersXML has no date vars → fast master read.
+    // buildFYVouchersXML is proven to work in Tally Prime.
+    const [vouchersRaw, ledgersRaw] = await Promise.all([
+        callTally(buildFYVouchersXML(from, to, company), 60000, tallyUrl),
+        callTally(buildAllLedgersXML(company),           35000, tallyUrl),
+    ]);
+
+    // Build parent lookup
+    const parentMap = new Map();
+    for (const m of ledgersRaw.matchAll(/<LEDGER NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/g)) {
+        const name        = decodeXml(m[1]);
+        const parentMatch = m[2].match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
+        parentMap.set(name, parentMatch ? decodeXml(parentMatch[1].trim()) : '');
+    }
+
+    // Aggregate Dr / Cr per ledger — overall totals + per-month breakdown.
+    // Also track counterpart groups (proportionally):
+    //   drGroups: { groupName: amount } — Cr-side groups that funded this ledger's Dr entries
+    //   crGroups: { groupName: amount } — Dr-side groups that absorbed this ledger's Cr entries
+    const ledgerMap = new Map();
+
+    const ensure = (name) => {
+        if (!ledgerMap.has(name)) ledgerMap.set(name, { dr: 0, cr: 0, drGroups: {}, crGroups: {}, months: new Map() });
+        return ledgerMap.get(name);
+    };
+    const ensureMonth = (rec, mk) => {
+        if (!rec.months.has(mk)) rec.months.set(mk, { dr: 0, cr: 0, drGroups: {}, crGroups: {} });
+        return rec.months.get(mk);
+    };
+
+    const voucherRegex = /<VOUCHER [^>]*>([\s\S]*?)<\/VOUCHER>/g;
+    let vMatch;
+    while ((vMatch = voucherRegex.exec(vouchersRaw)) !== null) {
+        const body      = vMatch[1];
+        const dateM     = body.match(/<DATE[^>]*>(\d{8})<\/DATE>/);
+        const monthKey  = dateM ? dateM[1].substring(0, 6) : null;
+
+        const entries    = [];
+        const entryRegex = /<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/g;
+        let eMatch;
+        while ((eMatch = entryRegex.exec(body)) !== null) {
+            const ebody  = eMatch[1];
+            const nameM  = ebody.match(/<LEDGERNAME[^>]*>([^<]+)<\/LEDGERNAME>/);
+            const amtM   = ebody.match(/<AMOUNT[^>]*>([^<]+)<\/AMOUNT>/);
+            const isDrM  = ebody.match(/<ISDEEMEDPOSITIVE[^>]*>([^<]+)<\/ISDEEMEDPOSITIVE>/);
+            if (!nameM || !amtM) continue;
+            const ledger = decodeXml(nameM[1].trim());
+            const amount = Math.abs(parseFloat(amtM[1]) || 0);
+            if (amount === 0) continue;
+            const isDr   = (isDrM?.[1]?.trim() || 'No').toLowerCase() === 'yes';
+            entries.push({ ledger, amount, isDr });
+        }
+
+        const drEntries = entries.filter(e =>  e.isDr);
+        const crEntries = entries.filter(e => !e.isDr);
+        const totalDr   = drEntries.reduce((s, e) => s + e.amount, 0);
+        const totalCr   = crEntries.reduce((s, e) => s + e.amount, 0);
+
+        // For each Dr entry: credit-side counterparts funded it (proportionally)
+        for (const e of drEntries) {
+            const rec    = ensure(e.ledger);
+            const mon    = monthKey ? ensureMonth(rec, monthKey) : null;
+            rec.dr      += e.amount;
+            if (mon) mon.dr += e.amount;
+            const share  = totalDr > 0 ? e.amount / totalDr : 1;
+            for (const cp of crEntries) {
+                const grp = parentMap.get(cp.ledger) || cp.ledger;
+                const amt = cp.amount * share;
+                rec.drGroups[grp] = (rec.drGroups[grp] || 0) + amt;
+                if (mon) mon.drGroups[grp] = (mon.drGroups[grp] || 0) + amt;
+            }
+        }
+
+        // For each Cr entry: debit-side counterparts absorbed it (proportionally)
+        for (const e of crEntries) {
+            const rec    = ensure(e.ledger);
+            const mon    = monthKey ? ensureMonth(rec, monthKey) : null;
+            rec.cr      += e.amount;
+            if (mon) mon.cr += e.amount;
+            const share  = totalCr > 0 ? e.amount / totalCr : 1;
+            for (const cp of drEntries) {
+                const grp = parentMap.get(cp.ledger) || cp.ledger;
+                const amt = cp.amount * share;
+                rec.crGroups[grp] = (rec.crGroups[grp] || 0) + amt;
+                if (mon) mon.crGroups[grp] = (mon.crGroups[grp] || 0) + amt;
+            }
+        }
+    }
+
+    const data = { ledgerMap, parentMap };
+    _voucherSummaryCache.set(cacheKey, { data, time: Date.now() });
+    return data;
+}
+
+exports.getLedgerDetail = async (req, res, next) => {
+    try {
+        const { tallyUrl } = req;
+        const { from, to, company } = resolvePeriod(req);
+        const ledgerName = req.query.ledger;
+        if (!ledgerName) return res.status(400).json({ success: false, error: 'ledger param required' });
+        if (!from) return res.json({ success: true, data: null });
+
+        const { ledgerMap, parentMap } = await _fetchVoucherSummary(from, to, company, tallyUrl);
+        const parent = parentMap.get(ledgerName) || '';
+        const entry  = ledgerMap.get(ledgerName) || { dr: 0, cr: 0, drGroups: {}, crGroups: {}, months: new Map() };
+        const net    = entry.dr - entry.cr;
+
+        const sortGroups = (obj) =>
+            Object.entries(obj)
+                .map(([name, amount]) => ({ name, amount }))
+                .sort((a, b) => b.amount - a.amount);
+
+        // Build full month sequence for the period (including zero-activity months)
+        const months = _monthKeys(from, to).map(mk => {
+            const md = entry.months.get(mk) || { dr: 0, cr: 0, drGroups: {}, crGroups: {} };
+            const yr = parseInt(mk.substring(0, 4));
+            const mo = parseInt(mk.substring(4, 6));
+            return {
+                month:    `${_MONTH_NAMES[mo]} ${yr}`,
+                dr:       md.dr,
+                cr:       md.cr,
+                drGroups: sortGroups(md.drGroups),
+                crGroups: sortGroups(md.crGroups),
+            };
+        });
+
+        res.json({
+            success: true,
+            data: {
+                name:        ledgerName,
+                parent,
+                dr:          entry.dr,
+                cr:          entry.cr,
+                drGroups:    sortGroups(entry.drGroups),
+                crGroups:    sortGroups(entry.crGroups),
+                net:         Math.abs(net),
+                netIsDr:     net >= 0,
+                hasActivity: entry.dr > 0 || entry.cr > 0,
+                months,
+                period:      { from, to }
+            }
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+exports.getLedgers = async (req, res, next) => {
+    try {
+        const { tallyUrl } = req;
+        const company = req.query.company || null;
+        const raw = await callTally(buildAllLedgersXML(company), 35000, tallyUrl);
+        const ledgers = [];
+        for (const m of raw.matchAll(/<LEDGER NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/g)) {
+            const name = decodeXml(m[1]);
+            const parentMatch = m[2].match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
+            const parent = parentMatch ? decodeXml(parentMatch[1].trim()) : '';
+            ledgers.push({ name, parent });
+        }
+        res.json({ success: true, data: { ledgers } });
+    } catch (err) {
+        next(err);
     }
 };

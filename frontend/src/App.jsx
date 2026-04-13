@@ -61,11 +61,24 @@ function ProjectPage({ queryParams }) {
   return <ProjectCashFlow data={data} queryParams={queryParams} />
 }
 
-function SearchPage({ sections }) {
+function SearchPage({ sections, selectedCompany, queryParams, searchQuery, setSearchQuery, searchResults, setSearchResults, searchLedgerResults, setSearchLedgerResults, searchError, setSearchError }) {
   if (!sections.length) return <LoadingBox />
   return (
     <div className="search-page">
-      <AISearch sections={sections} componentMap={COMPONENT_MAP} />
+      <AISearch
+        sections={sections}
+        componentMap={COMPONENT_MAP}
+        selectedCompany={selectedCompany}
+        queryParams={queryParams}
+        query={searchQuery}
+        setQuery={setSearchQuery}
+        results={searchResults}
+        setResults={setSearchResults}
+        ledgerResults={searchLedgerResults}
+        setLedgerResults={setSearchLedgerResults}
+        error={searchError}
+        setError={setSearchError}
+      />
     </div>
   )
 }
@@ -101,6 +114,12 @@ function SelectFiltersBox() {
 export default function App() {
   const [sections, setSections]             = useState([])
   const [tallyConnected, setTallyConnected] = useState(null)
+
+  // Search state lifted here so it persists when navigating away from the Search page
+  const [searchQuery, setSearchQuery]                   = useState('')
+  const [searchResults, setSearchResults]               = useState(null)
+  const [searchLedgerResults, setSearchLedgerResults]   = useState([])
+  const [searchError, setSearchError]                   = useState('')
 
   // Filter state
   const [availableYears, setAvailableYears]         = useState([])
@@ -256,7 +275,21 @@ export default function App() {
 
       <main className="app-main">
         <Routes>
-          <Route path="/" element={<SearchPage sections={sections} />} />
+          <Route path="/" element={
+            <SearchPage
+              sections={sections}
+              selectedCompany={selectedCompany}
+              queryParams={queryParams}
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              searchResults={searchResults}
+              setSearchResults={setSearchResults}
+              searchLedgerResults={searchLedgerResults}
+              setSearchLedgerResults={setSearchLedgerResults}
+              searchError={searchError}
+              setSearchError={setSearchError}
+            />
+          } />
           <Route path="/company-cashflow" element={<CompanyPage queryParams={queryParams} />} />
           <Route path="/project-cashflow" element={<ProjectPage queryParams={queryParams} />} />
         </Routes>
