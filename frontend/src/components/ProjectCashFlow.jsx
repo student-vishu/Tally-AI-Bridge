@@ -1,4 +1,4 @@
-import { useState, Fragment } from 'react'
+import { useState } from 'react'
 
 const fmt = (value) =>
   new Intl.NumberFormat('en-IN', {
@@ -207,92 +207,58 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
 }
 
 function ExpandPanel({ data }) {
-  const [openIdx, setOpenIdx] = useState(null)
-  const toggle = (idx) => setOpenIdx(prev => prev === idx ? null : idx)
-
   if (!data?.items?.length) {
     return <div className="project-expand-empty">No data available for this period.</div>
   }
-
+  const withData = data.items.filter(item => item.grandDebit > 0 || item.grandCredit > 0)
+  if (!withData.length) {
+    return <div className="project-expand-empty">No transactions in this period.</div>
+  }
   return (
     <div className="proj-sub-panel">
-      <table className="proj-sub-summary">
-        <thead>
-          <tr>
-            <th className="proj-sub-name-col">Sub-Cost Centre</th>
-            <th className="proj-sub-num-col">Total Debit</th>
-            <th className="proj-sub-num-col">Total Credit</th>
-            <th className="proj-sub-num-col">Closing Balance</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.items.map((item, idx) => (
-            <Fragment key={idx}>
-              <tr
-                className={`proj-sub-row${openIdx === idx ? ' proj-sub-row--open' : ''}`}
-                onClick={() => toggle(idx)}
-              >
-                <td className="proj-sub-name-col">
-                  <span className="proj-sub-toggle">{openIdx === idx ? '▼' : '▶'}</span>
-                  {item.name}
-                </td>
-                <td className="proj-sub-num-col proj-sub-dr">{fmtAmt(item.grandDebit)}</td>
-                <td className="proj-sub-num-col proj-sub-cr">{fmtAmt(item.grandCredit)}</td>
-                <td className="proj-sub-num-col proj-sub-closing">
-                  {fmt(item.closingBalance)}&nbsp;<span className="pm-dr-cr">{item.closingDr ? 'Dr' : 'Cr'}</span>
-                </td>
-              </tr>
-              {openIdx === idx && (
-                <tr className="proj-sub-detail-row">
-                  <td colSpan={4} className="proj-sub-detail-cell">
-                    <MonthTable item={item} />
-                  </td>
-                </tr>
-              )}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
+      {withData.map((item, idx) => (
+        <SubCostCentreSection key={idx} item={item} />
+      ))}
     </div>
   )
 }
 
-function MonthTable({ item }) {
-  if (!item.months || item.months.length === 0) {
-    return <div className="project-expand-empty">No transactions in this period.</div>
-  }
+function SubCostCentreSection({ item }) {
   return (
-    <table className="project-monthly-table proj-monthly-inline">
-      <thead>
-        <tr>
-          <th>Month</th>
-          <th className="pm-num">Debit</th>
-          <th className="pm-num">Credit</th>
-          <th className="pm-num">Closing Balance</th>
-        </tr>
-      </thead>
-      <tbody>
-        {item.months.map((m, i) => (
-          <tr key={i}>
-            <td>{m.monthShort}</td>
-            <td className="pm-num">{fmtAmt(m.debit)}</td>
-            <td className="pm-num">{fmtAmt(m.credit)}</td>
+    <div className="proj-sub-section">
+      <div className="proj-sub-section-header">{item.name}</div>
+      <table className="project-monthly-table">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th className="pm-num">Debit</th>
+            <th className="pm-num">Credit</th>
+            <th className="pm-num">Closing Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {item.months.map((m, i) => (
+            <tr key={i}>
+              <td>{m.monthShort}</td>
+              <td className="pm-num">{fmtAmt(m.debit)}</td>
+              <td className="pm-num">{fmtAmt(m.credit)}</td>
+              <td className="pm-num pm-closing">
+                {fmt(m.closingBalance)}&nbsp;<span className="pm-dr-cr">{m.closingDr ? 'Dr' : 'Cr'}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="pm-grand-total">
+            <td>Grand Total</td>
+            <td className="pm-num">{fmtAmt(item.grandDebit)}</td>
+            <td className="pm-num">{fmtAmt(item.grandCredit)}</td>
             <td className="pm-num pm-closing">
-              {fmt(m.closingBalance)}&nbsp;<span className="pm-dr-cr">{m.closingDr ? 'Dr' : 'Cr'}</span>
+              {fmt(item.closingBalance)}&nbsp;<span className="pm-dr-cr">{item.closingDr ? 'Dr' : 'Cr'}</span>
             </td>
           </tr>
-        ))}
-      </tbody>
-      <tfoot>
-        <tr className="pm-grand-total">
-          <td>Grand Total</td>
-          <td className="pm-num">{fmtAmt(item.grandDebit)}</td>
-          <td className="pm-num">{fmtAmt(item.grandCredit)}</td>
-          <td className="pm-num pm-closing">
-            {fmt(item.closingBalance)}&nbsp;<span className="pm-dr-cr">{item.closingDr ? 'Dr' : 'Cr'}</span>
-          </td>
-        </tr>
-      </tfoot>
-    </table>
+        </tfoot>
+      </table>
+    </div>
   )
 }
