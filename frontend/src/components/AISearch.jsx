@@ -392,7 +392,7 @@ export default function AISearch({
             return (
               <div key={section.id} className="ai-result-section">
                 <h2 className="ai-result-heading">{section.label}</h2>
-                <Component data={data} />
+                <Component data={data} queryParams={queryParams} />
               </div>
             )
           })}
