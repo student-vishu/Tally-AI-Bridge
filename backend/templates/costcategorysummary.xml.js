@@ -35,3 +35,4 @@ exports.buildCostCategorySummaryXML = (from, to, company) => `
     </EXPORTDATA>
   </BODY>
 </ENVELOPE>`;
+

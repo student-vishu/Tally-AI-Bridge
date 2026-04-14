@@ -1,20 +1,11 @@
 const { callTally, fetchCostCategories, decodeXml } = require('./tally.services');
-const { buildCostCentreHierarchyXML, buildCostCentreVouchersXML } = require('../templates/costcentre.xml');
-const { parseXML } = require('./parser.services');
+const { buildCostCentreHierarchyXML } = require('../templates/costcentre.xml');
+const { buildCostCategorySummaryXML } = require('../templates/costcategorysummary.xml');
+const { buildFYVouchersXML } = require('../templates/bankcash.xml');
+const { parseCostCategorySummaryXML } = require('./parser.services');
 
-// ─── Month helpers ────────────────────────────────────────────────────────────
-const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'];
-
-function fyMonthKeys(fyStart) {
-    const keys = [];
-    for (let m = 4; m <= 12; m++) keys.push(`${fyStart}${String(m).padStart(2, '0')}`);
-    for (let m = 1; m <= 3;  m++) keys.push(`${fyStart + 1}${String(m).padStart(2, '0')}`);
-    return keys;
-}
-
-// ─── Cost-centre hierarchy cache (per Tally URL + company) ───────────────────
-const _hierCaches = new Map(); // `${tallyUrl}::${company}` → { data, time }
+// ─── Cost-centre hierarchy cache ─────────────────────────────────────────────
+const _hierCaches = new Map();
 const HIER_TTL    = 5 * 60 * 1000;
 
 async function fetchCostCentreHierarchy(tallyUrl, company = null) {
@@ -27,8 +18,8 @@ async function fetchCostCentreHierarchy(tallyUrl, company = null) {
     const parentMap   = {};
 
     for (const m of raw.matchAll(/<COSTCENTRE NAME="([^"]+)"[^>]*>([\s\S]*?)<\/COSTCENTRE>/g)) {
-        const name = decodeXml(m[1]);
-        const pm   = m[2].match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
+        const name   = decodeXml(m[1]);
+        const pm     = m[2].match(/<PARENT[^>]*>([^<]*)<\/PARENT>/);
         const parent = pm ? decodeXml(pm[1].trim()) : '';
         if (parent) {
             parentMap[name] = parent;
@@ -37,145 +28,233 @@ async function fetchCostCentreHierarchy(tallyUrl, company = null) {
         }
     }
 
-    _hierCaches.set(`${tallyUrl}::${company || ''}`, { data: { childrenMap, parentMap }, time: Date.now() });
+    _hierCaches.set(cacheKey, { data: { childrenMap, parentMap }, time: Date.now() });
     return { childrenMap, parentMap };
 }
 
-// ─── FY-level monthly CC data cache (per Tally URL + company) ────────────────
-const _cbCaches    = new Map(); // `${tallyUrl}::${fyStart}::${company}` → { data, time }
-const _cbInflights = new Map(); // same key → Promise
-const CB_TTL       = 5 * 60 * 1000;
-
-async function fetchFYMonthlyData(fyStart, tallyUrl, company = null) {
-    const cacheKey = `${tallyUrl}::${fyStart}::${company || ''}`;
-    const cached = _cbCaches.get(cacheKey);
-    if (cached && (Date.now() - cached.time) < CB_TTL) {
-        return cached.data;
+// ─── Root-level period summary (main table + fallback) ────────────────────────
+function parseCCSummary(raw) {
+    const parsed = parseCostCategorySummaryXML(raw);
+    const names  = [].concat(parsed?.ENVELOPE?.DSPACCNAME || []);
+    const infos  = [].concat(parsed?.ENVELOPE?.DSPACCINFO || []);
+    const totals = new Map();
+    for (let i = 0; i < names.length; i++) {
+        const name = names[i]?.DSPDISPNAME;
+        if (!name) continue;
+        const drAmt = parseFloat(infos[i]?.DSPDRAMT?.DSPDRAMTA || 0);
+        const crAmt = parseFloat(infos[i]?.DSPCRAMT?.DSPCRAMTA || 0);
+        totals.set(name, {
+            debit:  drAmt < 0 ? Math.abs(drAmt) : 0,
+            credit: crAmt > 0 ? crAmt            : 0
+        });
     }
-    if (_cbInflights.has(cacheKey)) return _cbInflights.get(cacheKey);
+    return totals;
+}
+
+const _sumCaches    = new Map();
+const _sumInflights = new Map();
+const SUM_TTL       = 5 * 60 * 1000;
+
+async function fetchPeriodSummary(from, to, tallyUrl, company = null) {
+    const cacheKey = `root::${tallyUrl}::${from}::${to}::${company || ''}`;
+    const cached = _sumCaches.get(cacheKey);
+    if (cached && (Date.now() - cached.time) < SUM_TTL) return cached.data;
+    if (_sumInflights.has(cacheKey)) return _sumInflights.get(cacheKey);
 
     const inflight = (async () => {
         try {
-            return await _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl, company);
+            const raw  = await callTally(buildCostCategorySummaryXML(from, to, company), 35000, tallyUrl);
+            const data = parseCCSummary(raw);
+            _sumCaches.set(cacheKey, { data, time: Date.now() });
+            return data;
         } finally {
-            _cbInflights.delete(cacheKey);
+            _sumInflights.delete(cacheKey);
         }
     })();
-    _cbInflights.set(cacheKey, inflight);
+    _sumInflights.set(cacheKey, inflight);
     return inflight;
 }
 
-async function _doFetchFYMonthlyData(fyStart, cacheKey, tallyUrl, company = null) {
-    const fyFrom = `${fyStart}0401`;
-    const fyTo   = `${fyStart + 1}0331`;
+// ─── Month helpers ────────────────────────────────────────────────────────────
+const MONTH_NAMES  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_SHORTS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-    console.log(`[CostCentre] Day Book export FY ${fyStart} (${fyFrom} → ${fyTo})`);
-    const raw = await callTally(buildCostCentreVouchersXML(fyFrom, fyTo, company), 120000, tallyUrl);
+function generateMonthSlots(from, to) {
+    // Returns [{key:'202504', label:'April 2025', short:'Apr'}, …]
+    const slots = [];
+    let y = parseInt(from.substring(0, 4));
+    let m = parseInt(from.substring(4, 6));
+    const ey = parseInt(to.substring(0, 4));
+    const em = parseInt(to.substring(4, 6));
+    while (y < ey || (y === ey && m <= em)) {
+        slots.push({ key: `${y}${String(m).padStart(2, '0')}`, label: `${MONTH_NAMES[m-1]} ${y}`, short: MONTH_SHORTS[m-1] });
+        if (++m > 12) { m = 1; y++; }
+    }
+    return slots;
+}
 
-    // Day Book returns TALLYMESSAGE format — same structure transformProjectCashFlow expects
-    const parsed   = parseXML(raw);
-    const messages = [].concat(parsed?.ENVELOPE?.BODY?.IMPORTDATA?.REQUESTDATA?.TALLYMESSAGE || []);
+// ─── Parse CC allocations from FY Voucher Collection XML ─────────────────────
+// Returns Map<ccName, Map<YYYYMM, {debit, credit}>>
+// Sign convention (from transformer.services.js): +AMOUNT = Credit, -AMOUNT = Debit
+function parseCCAllocationsFromVouchers(raw) {
+    const monthlyMap   = new Map();
+    const voucherRegex = /<VOUCHER\b[^>]*>([\s\S]*?)<\/VOUCHER>/g;
+    let vMatch;
 
-    const ccMonthly = new Map();
-    let voucherCount = 0;
-    let ccEntryCount = 0;
+    while ((vMatch = voucherRegex.exec(raw)) !== null) {
+        const vBody = vMatch[1];
 
-    for (const msg of messages) {
-        const voucher = msg.VOUCHER;
-        if (!voucher) continue;
-        voucherCount++;
+        const dateM = vBody.match(/<DATE[^>]*>(\d{8})<\/DATE>/);
+        if (!dateM) continue;
+        const monthKey = dateM[1].substring(0, 6); // YYYYMM
 
-        const dateStr = String(voucher.DATE || '');
-        if (dateStr.length < 8) continue;
-        const monthKey = dateStr.substring(0, 6);
+        const entryRegex = /<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/g;
+        let eMatch;
 
-        const entries = [].concat(voucher['ALLLEDGERENTRIES.LIST'] || []);
+        while ((eMatch = entryRegex.exec(vBody)) !== null) {
+            const eBody    = eMatch[1];
+            const ccBodies = [];
 
-        for (const entry of entries) {
-            // Collect cost centre allocations from BOTH paths:
-            //   Path 1 — named categories: entry → CATEGORYALLOCATIONS.LIST → COSTCENTREALLOCATIONS.LIST
-            //   Path 2 — primary category: entry → COSTCENTREALLOCATIONS.LIST (direct)
-            const costCentres = [];
-            const catAllocs = [].concat(entry['CATEGORYALLOCATIONS.LIST'] || []);
-            for (const cat of catAllocs) {
-                costCentres.push(...[].concat(cat['COSTCENTREALLOCATIONS.LIST'] || []));
+            // Path 1: CATEGORYALLOCATIONS.LIST → COSTCENTREALLOCATIONS.LIST
+            const catRegex = /<CATEGORYALLOCATIONS\.LIST>([\s\S]*?)<\/CATEGORYALLOCATIONS\.LIST>/g;
+            let cMatch;
+            while ((cMatch = catRegex.exec(eBody)) !== null) {
+                const ccRegex = /<COSTCENTREALLOCATIONS\.LIST>([\s\S]*?)<\/COSTCENTREALLOCATIONS\.LIST>/g;
+                let ccMatch;
+                while ((ccMatch = ccRegex.exec(cMatch[1])) !== null) ccBodies.push(ccMatch[1]);
             }
-            if (costCentres.length === 0) {
-                costCentres.push(...[].concat(entry['COSTCENTREALLOCATIONS.LIST'] || []));
+
+            // Path 2: direct COSTCENTREALLOCATIONS.LIST (only if Path 1 found nothing)
+            if (ccBodies.length === 0) {
+                const ccRegex = /<COSTCENTREALLOCATIONS\.LIST>([\s\S]*?)<\/COSTCENTREALLOCATIONS\.LIST>/g;
+                let ccMatch;
+                while ((ccMatch = ccRegex.exec(eBody)) !== null) ccBodies.push(ccMatch[1]);
             }
 
-            for (const cc of costCentres) {
-                const ccName = String(cc.NAME || '').trim();
-                // In Tally TALLYMESSAGE: positive AMOUNT = credit, negative = debit
-                const amount = parseFloat(cc.AMOUNT || 0);
-                if (!ccName || amount === 0) continue;
+            for (const ccBody of ccBodies) {
+                const nameM = ccBody.match(/<NAME[^>]*>([^<]+)<\/NAME>/);
+                const amtM  = ccBody.match(/<AMOUNT[^>]*>([^<]+)<\/AMOUNT>/);
+                if (!nameM || !amtM) continue;
+                const name   = decodeXml(nameM[1].trim());
+                const amount = parseFloat(amtM[1].trim()) || 0;
+                if (!name || amount === 0) continue;
 
-                if (!ccMonthly.has(ccName)) ccMonthly.set(ccName, {});
-                const monthlyMap = ccMonthly.get(ccName);
-                if (!monthlyMap[monthKey]) monthlyMap[monthKey] = { debit: 0, credit: 0 };
-
-                if (amount < 0) monthlyMap[monthKey].debit  += Math.abs(amount);
-                else            monthlyMap[monthKey].credit += amount;
-                ccEntryCount++;
+                if (!monthlyMap.has(name)) monthlyMap.set(name, new Map());
+                const ccMonths = monthlyMap.get(name);
+                const prev     = ccMonths.get(monthKey) || { debit: 0, credit: 0 };
+                if (amount > 0) prev.credit += amount;
+                else            prev.debit  += Math.abs(amount);
+                ccMonths.set(monthKey, prev);
             }
         }
     }
 
-    console.log(`[CostCentre] ${voucherCount} vouchers, ${ccEntryCount} CC allocations, ${ccMonthly.size} cost centres`);
-    _cbCaches.set(cacheKey, { data: ccMonthly, time: Date.now() });
-    return ccMonthly;
+    return monthlyMap;
 }
 
-// ─── Build month rows for one cost centre ────────────────────────────────────
-function buildMonthlyData(monthlyMap, fyStart, from, to) {
-    const months = [];
-    let running = 0, grandDebit = 0, grandCredit = 0;
-    const fromKey = from ? from.substring(0, 6) : null;
-    const toKey   = to   ? to.substring(0, 6)   : null;
+// ─── Build monthly items for a list of CC names ───────────────────────────────
+// monthlyMap: Map<ccName, Map<YYYYMM, {debit, credit}>>  (from parseCCAllocationsFromVouchers)
+// namesToShow: ordered list of CC names to include
+// Returns [{name, months[], grandDebit, grandCredit, closingBalance, closingDr}]
+function buildMonthlyItems(monthlyMap, namesToShow, from, to) {
+    const slots = generateMonthSlots(from, to);
+    const items = [];
 
-    for (const mk of fyMonthKeys(fyStart)) {
-        if (fromKey && mk < fromKey) continue;
-        if (toKey   && mk > toKey)   continue;
-        const { debit = 0, credit = 0 } = monthlyMap[mk] || {};
-        if (debit === 0 && credit === 0) continue;
+    for (const name of namesToShow) {
+        const ccMonths     = monthlyMap.get(name) || new Map();
+        let grandDebit     = 0;
+        let grandCredit    = 0;
+        let runningBalance = 0; // positive = Dr, negative = Cr
+        const months       = [];
 
-        const yr  = parseInt(mk.substring(0, 4), 10);
-        const mon = parseInt(mk.substring(4, 6), 10);
-        running += debit - credit;
-        grandDebit  += debit;
-        grandCredit += credit;
+        for (const slot of slots) {
+            const { debit = 0, credit = 0 } = ccMonths.get(slot.key) || {};
+            grandDebit     += debit;
+            grandCredit    += credit;
+            runningBalance += debit - credit;
+            months.push({
+                month:          slot.label,
+                monthShort:     slot.short,
+                debit,
+                credit,
+                closingBalance: Math.abs(runningBalance),
+                closingDr:      runningBalance >= 0
+            });
+        }
 
-        months.push({
-            month:          `${MONTH_NAMES[mon]} ${yr}`,
-            monthShort:     MONTH_NAMES[mon],
-            debit,
-            credit,
-            closingBalance: Math.abs(running),
-            closingDr:      running >= 0
+        const net = grandDebit - grandCredit;
+        items.push({
+            name,
+            months,
+            grandDebit,
+            grandCredit,
+            closingBalance: Math.abs(net),
+            closingDr:      net >= 0
         });
     }
 
-    return { months, grandDebit, grandCredit, closingBalance: Math.abs(running), closingDr: running >= 0 };
+    return items;
 }
 
-// ─── All projects expand (single call, shared cache) ─────────────────────────
-exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
-    const year = parseInt(from.substring(0, 4), 10);
-    const month = parseInt(from.substring(4, 6), 10);
-    const fyStart = month >= 4 ? year : year - 1;
+// ─── CC allocation cache (monthly, from FY Voucher Collection) ────────────────
+const _ccAllocCaches    = new Map();
+const _ccAllocInflights = new Map();
 
-    const [{ childrenMap, parentMap }, costCategories, ccMonthly] = await Promise.all([
+async function fetchCCAllocations(from, to, tallyUrl, company = null) {
+    const cacheKey = `cc::${tallyUrl}::${from}::${to}::${company || ''}`;
+    const cached = _ccAllocCaches.get(cacheKey);
+    if (cached && (Date.now() - cached.time) < SUM_TTL) return cached.data;
+    if (_ccAllocInflights.has(cacheKey)) return _ccAllocInflights.get(cacheKey);
+
+    const inflight = (async () => {
+        try {
+            const raw  = await callTally(buildFYVouchersXML(from, to, company), 35000, tallyUrl);
+            const data = parseCCAllocationsFromVouchers(raw);
+            console.log(`[ccAlloc] Parsed ${data.size} cost centres from FY vouchers`);
+            if (data.size > 0) {
+                _ccAllocCaches.set(cacheKey, { data, time: Date.now() });
+                return data;
+            }
+            // Fallback: convert root-level Cost Category Summary into a monthly map
+            // (all totals placed in a synthetic key so buildMonthlyItems still works)
+            console.warn('[ccAlloc] No CC data in vouchers — falling back to Cost Category Summary');
+            const flat = await fetchPeriodSummary(from, to, tallyUrl, company);
+            const synth = new Map();
+            for (const [name, { debit, credit }] of flat) {
+                // Put the total in the last month of the period so closing balance is correct
+                const lastKey = to.substring(0, 6); // YYYYMM of period end
+                synth.set(name, new Map([[lastKey, { debit, credit }]]));
+            }
+            _ccAllocCaches.set(cacheKey, { data: synth, time: Date.now() });
+            return synth;
+        } catch (err) {
+            console.warn('[ccAlloc] Voucher CC fetch failed, falling back:', err.message);
+            const flat = await fetchPeriodSummary(from, to, tallyUrl, company);
+            const synth = new Map();
+            const lastKey = to.substring(0, 6);
+            for (const [name, { debit, credit }] of flat) synth.set(name, new Map([[lastKey, { debit, credit }]]));
+            return synth;
+        } finally {
+            _ccAllocInflights.delete(cacheKey);
+        }
+    })();
+    _ccAllocInflights.set(cacheKey, inflight);
+    return inflight;
+}
+
+// ─── All projects expand ──────────────────────────────────────────────────────
+exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
+    const [{ childrenMap, parentMap }, costCategories, ccMonthlyMap] = await Promise.all([
         fetchCostCentreHierarchy(tallyUrl, company),
         fetchCostCategories(tallyUrl, company),
-        fetchFYMonthlyData(fyStart, tallyUrl, company)
+        fetchCCAllocations(from, to, tallyUrl, company)
     ]);
 
     const catSet = new Set(costCategories.map(c => c.toLowerCase()));
 
-    // Walk each voucher-data cost centre up to its root, so parent cost centres (e.g. "Admin")
-    // appear as projects even when all transactions are booked to their children (ADMIN EXP, EHQ…).
+    // Find root cost centres from the monthly map
     const rootSet = new Set();
-    for (const name of ccMonthly.keys()) {
+    for (const name of ccMonthlyMap.keys()) {
         if (catSet.has(name.toLowerCase())) continue;
         let current = name;
         while (true) {
@@ -185,57 +264,38 @@ exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
         }
         if (!catSet.has(current.toLowerCase())) rootSet.add(current);
     }
-    const allProjects = [...rootSet];
 
     const result = [];
-    for (const projectName of allProjects) {
+    for (const projectName of rootSet) {
         const children    = (childrenMap[projectName] || []).filter(c => !catSet.has(c.toLowerCase()));
         const namesToShow = [projectName, ...children];
-        const items       = [];
-        for (const name of namesToShow) {
-            const monthlyMap = ccMonthly.get(name) || {};
-            const data = buildMonthlyData(monthlyMap, fyStart, from, to);
-            if (data.grandDebit > 0 || data.grandCredit > 0) {
-                items.push({ name, ...data });
-            }
-        }
+        const items       = buildMonthlyItems(ccMonthlyMap, namesToShow, from, to)
+            .filter(item => item.grandDebit > 0 || item.grandCredit > 0);
         if (items.length > 0) result.push({ project: projectName, from, to, items });
     }
     return result;
 };
 
-// ─── Pre-warm cache only (no response data needed) ───────────────────────────
+// ─── Pre-warm cache ───────────────────────────────────────────────────────────
 exports.warmFYCache = async (from, tallyUrl, company = null) => {
-    const year = parseInt(from.substring(0, 4), 10);
-    const month = parseInt(from.substring(4, 6), 10);
+    const year    = parseInt(from.substring(0, 4), 10);
+    const month   = parseInt(from.substring(4, 6), 10);
     const fyStart = month >= 4 ? year : year - 1;
-    await fetchFYMonthlyData(fyStart, tallyUrl, company);
+    const fyTo    = `${fyStart + 1}0331`;
+    await fetchPeriodSummary(`${fyStart}0401`, fyTo, tallyUrl, company);
 };
 
-// ─── Main export ──────────────────────────────────────────────────────────────
+// ─── Single project expand ────────────────────────────────────────────────────
 exports.fetchProjectExpand = async (projectName, from, to, tallyUrl, company = null) => {
-    const year = parseInt(from.substring(0, 4), 10);
-    const month = parseInt(from.substring(4, 6), 10);
-    const fyStart = month >= 4 ? year : year - 1;
-
-    const [{ childrenMap }, costCategories, ccMonthly] = await Promise.all([
+    const [{ childrenMap }, costCategories, ccMonthlyMap] = await Promise.all([
         fetchCostCentreHierarchy(tallyUrl, company),
         fetchCostCategories(tallyUrl, company),
-        fetchFYMonthlyData(fyStart, tallyUrl, company)
+        fetchCCAllocations(from, to, tallyUrl, company)
     ]);
 
     const catSet      = new Set(costCategories.map(c => c.toLowerCase()));
     const children    = (childrenMap[projectName] || []).filter(c => !catSet.has(c.toLowerCase()));
     const namesToShow = [projectName, ...children];
 
-    // Include all names from the hierarchy — even those with no data in this period.
-    // Filtering by grandDebit/grandCredit caused children to disappear when they had
-    // no transactions in the selected FY, leaving only the project itself visible.
-    const items = namesToShow.map(name => {
-        const monthlyMap = ccMonthly.get(name) || {};
-        const data = buildMonthlyData(monthlyMap, fyStart, from, to);
-        return { name, ...data };
-    });
-
-    return items;
+    return buildMonthlyItems(ccMonthlyMap, namesToShow, from, to);
 };

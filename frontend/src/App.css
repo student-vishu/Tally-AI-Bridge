@@ -879,8 +879,7 @@ body {
 
 /* ── Sub-cost-centre expand panel ── */
 .proj-sub-panel {
-  padding: 12px 16px 16px;
-  display: flex;
+  padding: 0;
   flex-direction: column;
   gap: 20px;
 }
@@ -965,6 +964,41 @@ body {
   background: #fff8e1 !important;
   border-top: 2px solid #f5c842;
   padding: 9px 14px;
+}
+
+/* ── Sub-CC summary row (level-1 expand: project → sub-CCs) ── */
+.proj-cc-summary-row td {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.proj-cc-summary-row:hover {
+  background: #eef2ff !important;
+}
+.proj-cc-toggle {
+  display: inline-block;
+  width: 18px;
+  font-size: 10px;
+  color: #0f3460;
+  cursor: pointer;
+}
+
+/* ── Nested monthly table (level-2 expand: sub-CC → months) ── */
+.proj-monthly-nested {
+  margin: 0;
+  border-top: 1px solid #d0d8f0;
+}
+.proj-monthly-nested th {
+  background: #f5f7ff;
+  font-size: 11px;
+  padding: 6px 20px 6px 36px;
+}
+.proj-monthly-nested th:first-child,
+.proj-monthly-nested td:first-child {
+  padding-left: 36px;
+}
+.proj-monthly-nested td {
+  padding: 6px 20px;
+  font-size: 12px;
 }
 
 /* ── Responsive ── */
