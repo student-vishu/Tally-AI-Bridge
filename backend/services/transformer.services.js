@@ -16,15 +16,22 @@ exports.transformFromCostCategorySummary = (parsed, costCategories = []) => {
     const infos = [].concat(parsed?.ENVELOPE?.DSPACCINFO || []);
 
     const projects = [];
+    let currentCategory = '';
     for (let i = 0; i < names.length; i++) {
         const name = names[i]?.DSPDISPNAME;
-        if (!name || costCategories.includes(name)) continue;
+        if (!name) continue;
+
+        if (costCategories.includes(name)) {
+            currentCategory = name;
+            continue;
+        }
 
         const drAmt = parseFloat(infos[i]?.DSPDRAMT?.DSPDRAMTA || 0);
         const crAmt = parseFloat(infos[i]?.DSPCRAMT?.DSPCRAMTA || 0);
 
         projects.push({
             project: name,
+            category: currentCategory,
             feesReceived: crAmt > 0 ? crAmt : 0,
             expensesDone: drAmt < 0 ? Math.abs(drAmt) : 0
         });

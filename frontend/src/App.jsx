@@ -2,13 +2,15 @@ import { useState, useEffect, useCallback } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
 import CompanyCashFlow from './components/CompanyCashFlow'
 import ProjectCashFlow from './components/ProjectCashFlow'
+import ProjectLedgerSummary from './components/ProjectLedgerSummary'
 import AISearch from './components/AISearch'
 import './App.css'
 
 // Map section IDs to display components — add one line here when adding a new section
 const COMPONENT_MAP = {
   'company-cashflow': CompanyCashFlow,
-  'project-cashflow': ProjectCashFlow
+  'project-cashflow': ProjectCashFlow,
+  'project-ledger-summary': ProjectLedgerSummary
 }
 
 function CompanyPage({ queryParams }) {
@@ -59,6 +61,31 @@ function ProjectPage({ queryParams }) {
   if (loading || !data) return <LoadingBox />
   if (error) return <ErrorBox message={error} />
   return <ProjectCashFlow data={data} queryParams={queryParams} />
+}
+
+function ProjectLedgerSummaryPage({ queryParams }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (!queryParams) return
+    setLoading(true)
+    setError(null)
+    fetch(`/api/dashboard/project-cashflow${queryParams}`)
+      .then(r => r.json())
+      .then(res => {
+        if (!res.success) throw new Error('Server error')
+        setData(res.data)
+      })
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false))
+  }, [queryParams])
+
+  if (!queryParams) return <SelectFiltersBox />
+  if (loading || !data) return <LoadingBox />
+  if (error) return <ErrorBox message={error} />
+  return <ProjectLedgerSummary data={data} queryParams={queryParams} />
 }
 
 function SearchPage({ sections, selectedCompany, queryParams, searchQuery, setSearchQuery, searchResults, setSearchResults, searchLedgerResults, setSearchLedgerResults, searchError, setSearchError }) {
@@ -269,6 +296,9 @@ export default function App() {
             <NavLink to="/project-cashflow" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
               Project Cash Flow
             </NavLink>
+            <NavLink to="/project-ledger-summary" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+              Project Ledger Summary
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -292,6 +322,7 @@ export default function App() {
           } />
           <Route path="/company-cashflow" element={<CompanyPage queryParams={queryParams} />} />
           <Route path="/project-cashflow" element={<ProjectPage queryParams={queryParams} />} />
+          <Route path="/project-ledger-summary" element={<ProjectLedgerSummaryPage queryParams={queryParams} />} />
         </Routes>
       </main>
 

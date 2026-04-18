@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 
 const fmt = (value) =>
   new Intl.NumberFormat('en-IN', {
@@ -69,22 +69,14 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
 
       const ExcelJS = (await import('exceljs')).default
       const wb = new ExcelJS.Workbook()
-      const ws = wb.addWorksheet('Project Cash Flow')
-      ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1, topLeftCell: 'B2' }]
-      ws.getColumn(1).width = 32
-      months.forEach((_, i) => { ws.getColumn(i + 2).width = 14 })
-      ws.getColumn(months.length + 2).width = 14
 
       function applyStyle(cell, { bg, color, bold, border, indent } = {}) {
         if (bg)    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + bg } }
-        cell.font = { name: 'Arial', bold: !!bold, ...(color ? { color: { argb: 'FF' + color } } : {}) }
+        cell.font = { name: 'Calibri', size: 12, bold: !!bold, ...(color ? { color: { argb: 'FF' + color } } : {}) }
         if (typeof cell.value === 'number') cell.numFmt = '#,##0.00'
-        if (border) { const s = { style: 'thin' }; cell.border = { top:s, left:s, bottom:s, right:s } }
+        if (border) { const s = { style: border === 'medium' ? 'medium' : 'thin' }; cell.border = { top:s, left:s, bottom:s, right:s } }
         if (indent && cell.col === 1) cell.alignment = { indent }
       }
-
-      ws.addRow(['', ...months, 'Total'])
-        .eachCell(c => applyStyle(c, { bg: 'BDD7EE', bold: true, border: true }))
 
       function getItemMonthVal(item, monthLabel, side) {
         const m = item.months?.find(mo => mo.month === monthLabel)
@@ -96,49 +88,105 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         return items.reduce((sum, item) => sum + getItemMonthVal(item, monthLabel, side), 0)
       }
 
-      for (const row of data) {
-        // Project header row
-        ws.addRow([row.project])
-          .eachCell(c => applyStyle(c, { bg: '4472C4', color: 'FFFFFF', bold: true, border: true }))
+      function buildLedgerDetails(item, monthLabels, side) {
+        const map = {}
+        for (const mo of item.months || []) {
+          for (const e of mo.entries || []) {
+            if (!(e[side] > 0)) continue
+            const label = e.party ? `${e.ledger} ↳ ${e.party}` : e.ledger
+            if (!map[label]) map[label] = {}
+            map[label][mo.month] = (map[label][mo.month] || 0) + e[side]
+          }
+        }
+        return Object.entries(map).map(([label, byMonth]) => ({
+          label,
+          amounts: monthLabels.map(ml => byMonth[ml] || ''),
+          total: Object.values(byMonth).reduce((s, v) => s + v, 0),
+        }))
+      }
 
+      const usedSheetNames = {}
+      function makeSheetName(name) {
+        let s = name.replace(/[\\\/\?\*\[\]:]/g, '').trim().substring(0, 31) || 'Sheet'
+        if (usedSheetNames[s]) { const sfx = ` ${++usedSheetNames[s]}`; s = s.substring(0, 31 - sfx.length) + sfx }
+        else usedSheetNames[s] = 1
+        return s
+      }
+
+      function setupSheet(ws) {
+        ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1, topLeftCell: 'B2' }]
+        ws.getColumn(1).width = 36
+        months.forEach((_, i) => { ws.getColumn(i + 2).width = 14 })
+        ws.getColumn(months.length + 2).width = 14
+        ws.addRow(['', ...months, 'Total'])
+          .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+      }
+
+      function writeItemSection(ws, item, headerName) {
+        ws.addRow([headerName])
+          .eachCell(c => applyStyle(c, { bold: true, border: true }))
+
+        if (item.grandCredit > 0) {
+          ws.addRow([`    ${item.name} — Fee Received`, ...months.map(() => ''), ''])
+            .eachCell(c => applyStyle(c, { border: true }))
+          for (const d of buildLedgerDetails(item, months, 'credit')) {
+            ws.addRow([`        ${d.label}`, ...d.amounts, d.total || ''])
+              .eachCell(c => applyStyle(c, { border: true }))
+          }
+        }
+        ws.addRow([])
+        ws.addRow(['  Total Fee Received', ...months.map(ml => getItemMonthVal(item, ml, 'credit') || ''), item.grandCredit || ''])
+          .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+        ws.addRow([])
+
+        if (item.grandDebit > 0) {
+          ws.addRow([`    ${item.name} — Expenses`, ...months.map(() => ''), ''])
+            .eachCell(c => applyStyle(c, { border: true }))
+          for (const d of buildLedgerDetails(item, months, 'debit')) {
+            ws.addRow([`        ${d.label}`, ...d.amounts, d.total || ''])
+              .eachCell(c => applyStyle(c, { border: true }))
+          }
+        }
+        ws.addRow([])
+        ws.addRow(['  Total Expenses', ...months.map(ml => getItemMonthVal(item, ml, 'debit') || ''), item.grandDebit || ''])
+          .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+        ws.addRow([])
+
+        const netTotal = item.grandCredit - item.grandDebit
+        ws.addRow(['  Net (Fee − Expenses)', ...months.map(ml => getItemMonthVal(item, ml, 'credit') - getItemMonthVal(item, ml, 'debit') || ''), netTotal || ''])
+          .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+        ws.addRow([])
+      }
+
+      // Detect the Projects category name dynamically (whatever Tally calls it)
+      const projectsCategoryName = data.find(r => {
+        const cat = (r.category || '').toLowerCase()
+        return cat.includes('project')
+      })?.category || 'Projects'
+
+      for (const row of data) {
         const projectItems = (allExpandData[row.project]?.items || [])
           .filter(item => item.grandDebit > 0 || item.grandCredit > 0)
 
-        // Sub-CC breakdown rows
-        for (const item of projectItems) {
-          if (item.grandCredit > 0) {
-            const crAmts = months.map(ml => getItemMonthVal(item, ml, 'credit') || '')
-            ws.addRow([`    ${item.name} — Fee Received`, ...crAmts, item.grandCredit || ''])
-              .eachCell(c => applyStyle(c, { bg: 'EBF3FB', border: true }))
+        const isProjectsCategory = row.category === projectsCategoryName
+
+        if (isProjectsCategory && projectItems.length > 1) {
+          // Projects with multiple sub-CCs — one sheet per sub-CC
+          for (const item of projectItems) {
+            const ws = wb.addWorksheet(makeSheetName(item.name))
+            setupSheet(ws)
+            writeItemSection(ws, item, item.name)
           }
-          if (item.grandDebit > 0) {
-            const drAmts = months.map(ml => getItemMonthVal(item, ml, 'debit') || '')
-            ws.addRow([`    ${item.name} — Expenses`, ...drAmts, item.grandDebit || ''])
-              .eachCell(c => applyStyle(c, { bg: 'FFF2CC', border: true }))
+        } else {
+          // Establishment items OR single-CC projects — one sheet per project (unchanged)
+          const ws = wb.addWorksheet(makeSheetName(row.project))
+          setupSheet(ws)
+          if (projectItems.length === 1) writeItemSection(ws, projectItems[0], row.project)
+          else if (projectItems.length > 1) {
+            // Establishment: write all sub-CCs stacked on one sheet
+            for (const item of projectItems) writeItemSection(ws, item, item.name)
           }
         }
-
-        // Summary: Fee Received — use voucher monthly sums, total from Cost Category Summary
-        const feeAmts = months.map(ml => getProjectMonthVal(row.project, ml, 'credit') || '')
-        ws.addRow(['  Fee Received', ...feeAmts, row.feesReceived || ''])
-          .eachCell(c => applyStyle(c, { bold: true, border: true }))
-
-        // Summary: Expenses
-        const expAmts = months.map(ml => getProjectMonthVal(row.project, ml, 'debit') || '')
-        ws.addRow(['  Expenses', ...expAmts, row.expensesDone || ''])
-          .eachCell(c => applyStyle(c, { bold: true, border: true }))
-
-        // Net row
-        const netTotal = row.feesReceived - row.expensesDone
-        const netAmts  = months.map(ml =>
-          getProjectMonthVal(row.project, ml, 'credit') - getProjectMonthVal(row.project, ml, 'debit') || ''
-        )
-        const netColor = netTotal >= 0 ? '375623' : '9C0006'
-        const netBg    = netTotal >= 0 ? 'C6EFCE' : 'FFC7CE'
-        ws.addRow(['  Net (Fee − Expenses)', ...netAmts, netTotal || ''])
-          .eachCell(c => applyStyle(c, { bg: netBg, color: netColor, bold: true, border: true }))
-
-        ws.addRow([])
       }
 
       const buffer = await wb.xlsx.writeBuffer()
@@ -302,9 +350,22 @@ function ExpandPanel({ data }) {
 }
 
 function MonthlyTable({ item }) {
+  const [expandedMonths, setExpandedMonths] = useState(new Set())
+
   if (!item.months?.length) {
     return <div className="project-expand-empty">No monthly breakdown available.</div>
   }
+
+  function toggleMonth(monthKey) {
+    setExpandedMonths(prev => {
+      const next = new Set(prev)
+      next.has(monthKey) ? next.delete(monthKey) : next.add(monthKey)
+      return next
+    })
+  }
+
+  const visibleMonths = item.months.filter(m => m.debit > 0 || m.credit > 0 || m.closingBalance > 0)
+
   return (
     <table className="project-monthly-table proj-monthly-nested">
       <thead>
@@ -316,20 +377,82 @@ function MonthlyTable({ item }) {
         </tr>
       </thead>
       <tbody>
-        {item.months
-          .filter(m => m.debit > 0 || m.credit > 0 || m.closingBalance > 0)
-          .map((m, i) => (
-            <tr key={i}>
-              <td>{m.monthShort}</td>
-              <td className="pm-num">{fmtOrDash(m.debit)}</td>
-              <td className="pm-num">{fmtOrDash(m.credit)}</td>
-              <td className="pm-num pm-closing">
-                {m.closingBalance > 0
-                  ? <>{fmt(m.closingBalance)}&nbsp;<span className="pm-dr-cr">{m.closingDr ? 'Dr' : 'Cr'}</span></>
-                  : '—'}
-              </td>
-            </tr>
-          ))}
+        {visibleMonths.map((m, i) => {
+          const hasEntries = m.entries?.length > 0
+          const isOpen = expandedMonths.has(m.month)
+          return (
+            <Fragment key={i}>
+              <tr className={isOpen ? 'pm-month-row-open' : ''}>
+                <td>
+                  {hasEntries
+                    ? <button className="pm-month-expand-btn" onClick={() => toggleMonth(m.month)}>
+                        {isOpen ? '▾' : '▸'} {m.monthShort}
+                      </button>
+                    : m.monthShort}
+                </td>
+                <td className="pm-num">{fmtOrDash(m.debit)}</td>
+                <td className="pm-num">{fmtOrDash(m.credit)}</td>
+                <td className="pm-num pm-closing">
+                  {m.closingBalance > 0
+                    ? <>{fmt(m.closingBalance)}&nbsp;<span className="pm-dr-cr">{m.closingDr ? 'Dr' : 'Cr'}</span></>
+                    : '—'}
+                </td>
+              </tr>
+              {isOpen && (
+                <tr className="pm-month-entries-row">
+                  <td colSpan={4} className="pm-month-entries-cell">
+                    <div className="pm-entries-groups">
+                      {(() => {
+                        const expenses = m.entries.filter(e => e.debit > 0)
+                        const income   = m.entries.filter(e => e.credit > 0)
+                        return (
+                          <>
+                            {expenses.length > 0 && (
+                              <div className="pm-entries-group pm-entries-expense">
+                                <div className="pm-entries-group-header">Expenses (Dr)</div>
+                                <table className="pm-entries-table">
+                                  <tbody>
+                                    {expenses.map((e, j) => (
+                                      <tr key={j}>
+                                        <td>
+                                          <span className="pm-entry-ledger">{e.ledger}</span>
+                                          {e.party && <span className="pm-entry-party">↳ {e.party}</span>}
+                                        </td>
+                                        <td className="pm-num">{fmt(e.debit)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            {income.length > 0 && (
+                              <div className="pm-entries-group pm-entries-income">
+                                <div className="pm-entries-group-header">Income / Fee Received (Cr)</div>
+                                <table className="pm-entries-table">
+                                  <tbody>
+                                    {income.map((e, j) => (
+                                      <tr key={j}>
+                                        <td>
+                                          <span className="pm-entry-ledger">{e.ledger}</span>
+                                          {e.party && <span className="pm-entry-party">↳ {e.party}</span>}
+                                        </td>
+                                        <td className="pm-num">{fmt(e.credit)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </>
+                        )
+                      })()}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          )
+        })}
       </tbody>
       <tfoot>
         <tr className="pm-grand-total">

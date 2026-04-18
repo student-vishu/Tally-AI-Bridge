@@ -1001,6 +1001,190 @@ body {
   font-size: 12px;
 }
 
+/* ── Month-level bifurcation expand (level-3: month → ledgers) ── */
+.pm-month-expand-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: #3b5bdb;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.pm-month-expand-btn:hover {
+  color: #1a3ab8;
+  text-decoration: underline;
+}
+.pm-month-row-open td {
+  background: #eef2ff !important;
+}
+.pm-month-entries-row > td.pm-month-entries-cell {
+  padding: 0 !important;
+  background: #f8f9ff;
+  border-bottom: 2px solid #c5cff5;
+}
+.pm-entries-groups {
+  display: flex;
+  gap: 0;
+}
+.pm-entries-group {
+  flex: 1;
+  border-right: 1px solid #d8dff5;
+}
+.pm-entries-group:last-child {
+  border-right: none;
+}
+.pm-entries-group-header {
+  padding: 5px 14px 5px 52px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.pm-entries-expense .pm-entries-group-header {
+  background: #fff3f0;
+  color: #c0392b;
+  border-bottom: 1px solid #fdd;
+}
+.pm-entries-income .pm-entries-group-header {
+  background: #f0faf3;
+  color: #1a7a3a;
+  border-bottom: 1px solid #c3e6cb;
+}
+.pm-entries-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.pm-entries-table td {
+  padding: 5px 14px 5px 52px;
+  border-bottom: 1px solid #eef0f8;
+  color: #445;
+}
+.pm-entries-table td.pm-num {
+  text-align: right;
+  padding-left: 0;
+  font-variant-numeric: tabular-nums;
+}
+.pm-entries-expense .pm-entries-table td.pm-num {
+  color: #c0392b;
+}
+.pm-entries-income .pm-entries-table td.pm-num {
+  color: #1a7a3a;
+}
+.pm-entries-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.pm-entries-expense .pm-entries-table tbody tr:hover td {
+  background: #fff8f7;
+}
+.pm-entries-income .pm-entries-table tbody tr:hover td {
+  background: #f4fbf6;
+}
+.pm-entry-ledger {
+  display: block;
+  font-size: 11px;
+  color: #334;
+}
+.pm-entry-party {
+  display: block;
+  font-size: 10px;
+  color: #888;
+  margin-top: 1px;
+}
+
+/* ── Project Ledger Summary ── */
+.pls-panel {
+  padding: 0;
+}
+.pls-columns {
+  display: flex;
+  gap: 0;
+}
+.pls-col {
+  flex: 1;
+  border-right: 1px solid #d8dff5;
+}
+.pls-col:last-child {
+  border-right: none;
+}
+.pls-col-header {
+  padding: 8px 16px 8px 36px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.pls-col-income .pls-col-header {
+  background: #f0faf3;
+  color: #1a7a3a;
+  border-bottom: 1px solid #c3e6cb;
+}
+.pls-col-expense .pls-col-header {
+  background: #fff3f0;
+  color: #c0392b;
+  border-bottom: 1px solid #fdd;
+}
+.pls-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.pls-table td {
+  padding: 6px 16px 6px 36px;
+  border-bottom: 1px solid #eef0f8;
+  vertical-align: top;
+}
+.pls-amt {
+  text-align: right !important;
+  padding-left: 0 !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-right: 16px !important;
+}
+.pls-col-income .pls-amt {
+  color: #1a7a3a;
+}
+.pls-col-expense .pls-amt {
+  color: #c0392b;
+}
+.pls-table tbody tr:hover td {
+  background: #f8f9ff;
+}
+.pls-total-row td {
+  font-weight: 700;
+  background: #f5f7ff !important;
+  border-top: 2px solid #d0d8f0;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.pls-empty {
+  padding: 12px 36px;
+  font-size: 12px;
+  color: #aaa;
+}
+.pls-cc-section {
+  margin-bottom: 0.25rem;
+}
+.pls-cc-name {
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  padding: 0.75rem 12px 0.35rem;
+  border-top: 1px solid #e5e7eb;
+  margin-top: 0.25rem;
+}
+.pls-cc-section:first-child .pls-cc-name {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 /* ── Responsive ── */
 @media (max-width: 600px) {
   .app-header {

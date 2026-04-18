@@ -94,10 +94,13 @@ function generateMonthSlots(from, to) {
 }
 
 // ─── Parse CC allocations from FY Voucher Collection XML ─────────────────────
-// Returns Map<ccName, Map<YYYYMM, {debit, credit}>>
+// Returns { monthlyMap, ledgerMap }
+//   monthlyMap : Map<ccName, Map<YYYYMM, {debit, credit}>>
+//   ledgerMap  : Map<ccName, Map<YYYYMM, Map<ledgerName, {debit, credit}>>>
 // Sign convention (from transformer.services.js): +AMOUNT = Credit, -AMOUNT = Debit
 function parseCCAllocationsFromVouchers(raw) {
     const monthlyMap   = new Map();
+    const ledgerMap    = new Map();
     const voucherRegex = /<VOUCHER\b[^>]*>([\s\S]*?)<\/VOUCHER>/g;
     let vMatch;
 
@@ -108,12 +111,33 @@ function parseCCAllocationsFromVouchers(raw) {
         if (!dateM) continue;
         const monthKey = dateM[1].substring(0, 6); // YYYYMM
 
+        // Party/client name from the voucher-level field (reliable for Payment/Receipt)
+        const partyM = vBody.match(/<PARTYLEDGERNAME[^>]*>([^<]+)<\/PARTYLEDGERNAME>/);
+        const voucherParty = partyM ? decodeXml(partyM[1].trim()) : '';
+
+        // Pre-scan all ledger entries for party fallback lookup
+        const allVoucherEntries = [];
+        const scanRegex = /<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/g;
+        let sMatch;
+        while ((sMatch = scanRegex.exec(vBody)) !== null) {
+            const lnM = sMatch[1].match(/<LEDGERNAME[^>]*>([^<]+)<\/LEDGERNAME>/);
+            const amM = sMatch[1].match(/<AMOUNT[^>]*>([^<]+)<\/AMOUNT>/);
+            if (lnM && amM) allVoucherEntries.push({
+                ledger: decodeXml(lnM[1].trim()),
+                amount: parseFloat(amM[1].trim()) || 0
+            });
+        }
+
         const entryRegex = /<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/g;
         let eMatch;
 
         while ((eMatch = entryRegex.exec(vBody)) !== null) {
             const eBody    = eMatch[1];
             const ccBodies = [];
+
+            // Extract ledger name for bifurcation
+            const ledgerNameM = eBody.match(/<LEDGERNAME[^>]*>([^<]+)<\/LEDGERNAME>/);
+            const ledger = ledgerNameM ? decodeXml(ledgerNameM[1].trim()) : 'Unknown';
 
             // Path 1: CATEGORYALLOCATIONS.LIST → COSTCENTREALLOCATIONS.LIST
             const catRegex = /<CATEGORYALLOCATIONS\.LIST>([\s\S]*?)<\/CATEGORYALLOCATIONS\.LIST>/g;
@@ -139,29 +163,61 @@ function parseCCAllocationsFromVouchers(raw) {
                 const amount = parseFloat(amtM[1].trim()) || 0;
                 if (!name || amount === 0) continue;
 
+                // Accumulate monthly totals
                 if (!monthlyMap.has(name)) monthlyMap.set(name, new Map());
                 const ccMonths = monthlyMap.get(name);
                 const prev     = ccMonths.get(monthKey) || { debit: 0, credit: 0 };
                 if (amount > 0) prev.credit += amount;
                 else            prev.debit  += Math.abs(amount);
                 ccMonths.set(monthKey, prev);
+
+                // Determine effective party name:
+                // - Use PARTYLEDGERNAME if present (reliable for Payment/Receipt)
+                // - Otherwise fall back to the largest-amount opposite-side ledger entry
+                //   (works for Journal, Payment without party, and custom voucher types)
+                let party = voucherParty;
+                if (!party) {
+                    const isDebit = amount < 0; // CC entry is expense (Dr)
+                    const opposite = allVoucherEntries.filter(e =>
+                        isDebit ? e.amount > 0 : e.amount < 0
+                    );
+                    if (opposite.length > 0) {
+                        party = opposite.reduce((a, b) =>
+                            Math.abs(a.amount) > Math.abs(b.amount) ? a : b
+                        ).ledger;
+                    }
+                }
+
+                // Accumulate ledger-level bifurcation (keyed by ledger+party so same
+                // ledger from two different parties stays as separate rows)
+                if (!ledgerMap.has(name)) ledgerMap.set(name, new Map());
+                const ccLedgerMonths = ledgerMap.get(name);
+                if (!ccLedgerMonths.has(monthKey)) ccLedgerMonths.set(monthKey, new Map());
+                const ledgerMonthMap = ccLedgerMonths.get(monthKey);
+                const compositeKey   = `${ledger}||${party}`;
+                const lprev = ledgerMonthMap.get(compositeKey) || { ledger, party, debit: 0, credit: 0 };
+                if (amount > 0) lprev.credit += amount;
+                else            lprev.debit  += Math.abs(amount);
+                ledgerMonthMap.set(compositeKey, lprev);
             }
         }
     }
 
-    return monthlyMap;
+    return { monthlyMap, ledgerMap };
 }
 
 // ─── Build monthly items for a list of CC names ───────────────────────────────
 // monthlyMap: Map<ccName, Map<YYYYMM, {debit, credit}>>  (from parseCCAllocationsFromVouchers)
+// ledgerMap:  Map<ccName, Map<YYYYMM, Map<ledgerName, {debit, credit}>>>  (optional)
 // namesToShow: ordered list of CC names to include
 // Returns [{name, months[], grandDebit, grandCredit, closingBalance, closingDr}]
-function buildMonthlyItems(monthlyMap, namesToShow, from, to) {
+function buildMonthlyItems(monthlyMap, namesToShow, from, to, ledgerMap = null) {
     const slots = generateMonthSlots(from, to);
     const items = [];
 
     for (const name of namesToShow) {
         const ccMonths     = monthlyMap.get(name) || new Map();
+        const ccLedgers    = ledgerMap?.get(name) || new Map();
         let grandDebit     = 0;
         let grandCredit    = 0;
         let runningBalance = 0; // positive = Dr, negative = Cr
@@ -172,13 +228,31 @@ function buildMonthlyItems(monthlyMap, namesToShow, from, to) {
             grandDebit     += debit;
             grandCredit    += credit;
             runningBalance += debit - credit;
+
+            // Build ledger bifurcation entries for this month
+            const entries = [];
+            const ledgerMonthMap = ccLedgers.get(slot.key);
+            if (ledgerMonthMap) {
+                for (const entry of ledgerMonthMap.values()) {
+                    if (entry.debit > 0 || entry.credit > 0) entries.push({ ...entry });
+                }
+                // Sort: debits first (desc), then credits (desc)
+                entries.sort((a, b) => {
+                    if (a.debit > 0 && b.debit > 0) return b.debit - a.debit;
+                    if (a.debit > 0) return -1;
+                    if (b.debit > 0) return 1;
+                    return b.credit - a.credit;
+                });
+            }
+
             months.push({
                 month:          slot.label,
                 monthShort:     slot.short,
                 debit,
                 credit,
                 closingBalance: Math.abs(runningBalance),
-                closingDr:      runningBalance >= 0
+                closingDr:      runningBalance >= 0,
+                entries
             });
         }
 
@@ -209,9 +283,10 @@ async function fetchCCAllocations(from, to, tallyUrl, company = null) {
     const inflight = (async () => {
         try {
             const raw  = await callTally(buildFYVouchersXML(from, to, company), 35000, tallyUrl);
-            const data = parseCCAllocationsFromVouchers(raw);
-            console.log(`[ccAlloc] Parsed ${data.size} cost centres from FY vouchers`);
-            if (data.size > 0) {
+            const { monthlyMap, ledgerMap } = parseCCAllocationsFromVouchers(raw);
+            console.log(`[ccAlloc] Parsed ${monthlyMap.size} cost centres from FY vouchers`);
+            if (monthlyMap.size > 0) {
+                const data = { monthlyMap, ledgerMap };
                 _ccAllocCaches.set(cacheKey, { data, time: Date.now() });
                 return data;
             }
@@ -225,15 +300,16 @@ async function fetchCCAllocations(from, to, tallyUrl, company = null) {
                 const lastKey = to.substring(0, 6); // YYYYMM of period end
                 synth.set(name, new Map([[lastKey, { debit, credit }]]));
             }
-            _ccAllocCaches.set(cacheKey, { data: synth, time: Date.now() });
-            return synth;
+            const data = { monthlyMap: synth, ledgerMap: new Map() };
+            _ccAllocCaches.set(cacheKey, { data, time: Date.now() });
+            return data;
         } catch (err) {
             console.warn('[ccAlloc] Voucher CC fetch failed, falling back:', err.message);
             const flat = await fetchPeriodSummary(from, to, tallyUrl, company);
             const synth = new Map();
             const lastKey = to.substring(0, 6);
             for (const [name, { debit, credit }] of flat) synth.set(name, new Map([[lastKey, { debit, credit }]]));
-            return synth;
+            return { monthlyMap: synth, ledgerMap: new Map() };
         } finally {
             _ccAllocInflights.delete(cacheKey);
         }
@@ -244,7 +320,7 @@ async function fetchCCAllocations(from, to, tallyUrl, company = null) {
 
 // ─── All projects expand ──────────────────────────────────────────────────────
 exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
-    const [{ childrenMap, parentMap }, costCategories, ccMonthlyMap] = await Promise.all([
+    const [{ childrenMap, parentMap }, costCategories, { monthlyMap: ccMonthlyMap, ledgerMap }] = await Promise.all([
         fetchCostCentreHierarchy(tallyUrl, company),
         fetchCostCategories(tallyUrl, company),
         fetchCCAllocations(from, to, tallyUrl, company)
@@ -269,7 +345,7 @@ exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
     for (const projectName of rootSet) {
         const children    = (childrenMap[projectName] || []).filter(c => !catSet.has(c.toLowerCase()));
         const namesToShow = [projectName, ...children];
-        const items       = buildMonthlyItems(ccMonthlyMap, namesToShow, from, to)
+        const items       = buildMonthlyItems(ccMonthlyMap, namesToShow, from, to, ledgerMap)
             .filter(item => item.grandDebit > 0 || item.grandCredit > 0);
         if (items.length > 0) result.push({ project: projectName, from, to, items });
     }
@@ -287,7 +363,7 @@ exports.warmFYCache = async (from, tallyUrl, company = null) => {
 
 // ─── Single project expand ────────────────────────────────────────────────────
 exports.fetchProjectExpand = async (projectName, from, to, tallyUrl, company = null) => {
-    const [{ childrenMap }, costCategories, ccMonthlyMap] = await Promise.all([
+    const [{ childrenMap }, costCategories, { monthlyMap: ccMonthlyMap, ledgerMap }] = await Promise.all([
         fetchCostCentreHierarchy(tallyUrl, company),
         fetchCostCategories(tallyUrl, company),
         fetchCCAllocations(from, to, tallyUrl, company)
@@ -297,5 +373,5 @@ exports.fetchProjectExpand = async (projectName, from, to, tallyUrl, company = n
     const children    = (childrenMap[projectName] || []).filter(c => !catSet.has(c.toLowerCase()));
     const namesToShow = [projectName, ...children];
 
-    return buildMonthlyItems(ccMonthlyMap, namesToShow, from, to);
+    return buildMonthlyItems(ccMonthlyMap, namesToShow, from, to, ledgerMap);
 };

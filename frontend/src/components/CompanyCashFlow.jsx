@@ -271,7 +271,7 @@ function sortedSubGroups(subGrpSet, catKey, side) {
 
 function applyStyle(cell, { bg, color, bold, border } = {}) {
   if (bg)    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + bg } }
-  cell.font = { name: 'Arial', bold: !!bold, ...(color ? { color: { argb: 'FF' + color } } : {}) }
+  cell.font = { name: 'Calibri', size: 12, bold: !!bold, ...(color ? { color: { argb: 'FF' + color } } : {}) }
   if (typeof cell.value === 'number') cell.numFmt = '#,##0.00'
   if (border) {
     const s = { style: 'thin' }
