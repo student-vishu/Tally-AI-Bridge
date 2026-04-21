@@ -4,6 +4,7 @@ import CompanyCashFlow from './components/CompanyCashFlow'
 import ProjectCashFlow from './components/ProjectCashFlow'
 import ProjectLedgerSummary from './components/ProjectLedgerSummary'
 import AISearch from './components/AISearch'
+import EmployeeList from './components/EmployeeList'
 import './App.css'
 
 // Map section IDs to display components — add one line here when adding a new section
@@ -299,6 +300,9 @@ export default function App() {
             <NavLink to="/project-ledger-summary" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
               Project Ledger Summary
             </NavLink>
+            <NavLink to="/employees" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+              Employees
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -323,6 +327,7 @@ export default function App() {
           <Route path="/company-cashflow" element={<CompanyPage queryParams={queryParams} />} />
           <Route path="/project-cashflow" element={<ProjectPage queryParams={queryParams} />} />
           <Route path="/project-ledger-summary" element={<ProjectLedgerSummaryPage queryParams={queryParams} />} />
+          <Route path="/employees" element={<EmployeeList />} />
         </Routes>
       </main>
 
