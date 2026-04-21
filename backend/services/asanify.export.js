@@ -169,6 +169,71 @@ exports.buildTeamAllocationExcel = async (employees, year, month, timesheetRows 
     // empRowMap[name] = { nameRow, projRows: { projName: rowNum } }
     const empRowMap = {};
 
+    // Pre-compute day/weekly-pct column indices for Total Hours row SUM formulas
+    const TOTAL_DEPTS     = ['executive team', 'qa'];
+    const TOTAL_ROW_FILL  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
+    const dayColIndices   = [];
+    const weekPctColIdxs  = [];
+    let dayTrackCol = 4;
+    weeks.forEach(week => {
+        week.forEach(() => { dayColIndices.push(dayTrackCol++); });
+        weekPctColIdxs.push(dayTrackCol++);
+    });
+    const totalHoursColIdx = dayTrackCol; // first summary col
+
+    const writeDeptTotalRow = (startRow, endRow) => {
+        const row = ws.getRow(dataRow);
+        row.height = 18;
+        ['', 'Total Hours', ''].forEach((v, i) => {
+            const cell = row.getCell(i + 1);
+            cell.value = v;
+            cell.fill  = TOTAL_ROW_FILL;
+            cell.font  = { bold: true, size: 10 };
+            cell.alignment = i === 1 ? LEFT : CENTER;
+            cell.border = CELL_BORDER;
+        });
+        dayColIndices.forEach(ci => {
+            const letter = colToLetter(ci);
+            const cell   = row.getCell(ci);
+            cell.value   = { formula: `SUM(${letter}${startRow}:${letter}${endRow})` };
+            cell.fill    = TOTAL_ROW_FILL;
+            cell.font    = { bold: true, size: 10 };
+            cell.alignment = CENTER;
+            cell.border  = CELL_BORDER;
+        });
+        weekPctColIdxs.forEach(ci => {
+            const letter = colToLetter(ci);
+            const cell   = row.getCell(ci);
+            cell.value   = { formula: `SUM(${letter}${startRow}:${letter}${endRow})` };
+            cell.numFmt  = '0.00%';
+            cell.fill    = TOTAL_ROW_FILL;
+            cell.font    = { bold: true, size: 10 };
+            cell.alignment = CENTER;
+            cell.border  = CELL_BORDER;
+        });
+        const thLetter  = colToLetter(totalHoursColIdx);
+        const thCell    = row.getCell(totalHoursColIdx);
+        thCell.value    = { formula: `SUM(${thLetter}${startRow}:${thLetter}${endRow})` };
+        thCell.fill     = TOTAL_ROW_FILL;
+        thCell.font     = { bold: true, size: 10 };
+        thCell.alignment = CENTER;
+        thCell.border   = CELL_BORDER;
+        const monthlyPctSummaryColIdx = totalHoursColIdx + 6; // last summary col
+        for (let c = totalHoursColIdx + 1; c <= ws.columns.length; c++) {
+            const cell  = row.getCell(c);
+            cell.fill   = TOTAL_ROW_FILL;
+            cell.border = CELL_BORDER;
+            if (c === monthlyPctSummaryColIdx) {
+                const letter   = colToLetter(c);
+                cell.value     = { formula: `SUM(${letter}${startRow}:${letter}${endRow})` };
+                cell.numFmt    = '0.00%';
+                cell.font      = { bold: true, size: 10 };
+                cell.alignment = CENTER;
+            }
+        }
+        dataRow++;
+    };
+
     // Helper to fill one project row (used for first row and sub-rows)
     const fillProjectRow = (row, fill, name, projName, isBold) => {
         // Calculate hours per day from timesheet
@@ -283,6 +348,11 @@ exports.buildTeamAllocationExcel = async (employees, year, month, timesheetRows 
             fillProjectRow(pr, PROJ_FILL, name, projects[pi], false);
             empRowMap[name].projRows[projects[pi]] = dataRow;
             dataRow++;
+        }
+
+        // Write per-employee Total Hours row for Executive team and QA
+        if (TOTAL_DEPTS.includes(empDept.toLowerCase())) {
+            writeDeptTotalRow(empRowMap[name].nameRow, dataRow - 1);
         }
 
         srNo++;

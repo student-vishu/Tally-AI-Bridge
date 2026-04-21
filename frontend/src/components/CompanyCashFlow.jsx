@@ -279,66 +279,94 @@ function applyStyle(cell, { bg, color, bold, border } = {}) {
   }
 }
 
+function cletter(n) {
+  let s = ''; while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); } return s;
+}
+const CELL_FMT = '#,##0.00'
+
+// applyStyle + explicit numFmt (needed for formula cells where typeof value !== 'number')
+function styleNum(cell, opts) { applyStyle(cell, opts); cell.numFmt = CELL_FMT }
+
 function buildInOutSheet(wb, banks, months, side, sheetName) {
   const ws = wb.addWorksheet(sheetName)
-  // Summary rows (category totals) appear ABOVE their detail — collapse button on category header
   ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false }
   ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1, topLeftCell: 'B2' }]
   ws.getColumn(1).width = 35
   months.forEach((_, i) => { ws.getColumn(i + 2).width = 14 })
   ws.getColumn(months.length + 2).width = 14
 
-  // Header row — light blue
-  const hdr = ws.addRow(['', ...months, 'Total'])
-  hdr.eachCell(c => applyStyle(c, { bg: 'BDD7EE', bold: true, border: true }))
+  const totalCol   = months.length + 2
+  const lastMthLtr = cletter(months.length + 1)
 
-  // Pre-compute merged entries per month (avoid recomputing in loops)
+  ws.addRow(['', ...months, 'Total'])
+    .eachCell(c => applyStyle(c, { bg: 'BDD7EE', bold: true, border: true }))
+
   const mergedPerMonth = months.map(ml => mergeEntries(banks, ml))
-
   const catOrder = side === 'debit' ? IN_CAT_ORDER : OUT_CAT_ORDER
 
   for (const catKey of catOrder) {
-    // Collect all sub-groups across all months
     const subGrpSet = new Set()
     mergedPerMonth.forEach(m => Object.keys(m[side][catKey] || {}).forEach(sg => subGrpSet.add(sg)))
     if (subGrpSet.size === 0) continue
 
-    // Category total row — yellow (placed FIRST so Excel collapse button sits here)
-    let catTotal = 0
-    const catTotals = mergedPerMonth.map(m => {
-      const s = Object.values(m[side][catKey] || {}).reduce((a, subLedgers) =>
-        a + Object.values(subLedgers).reduce((x, y) => x + y, 0), 0)
-      catTotal += s; return s || ''
-    })
-    ws.addRow([CAT_LABELS[catKey], ...catTotals, catTotal || ''])
-      .eachCell(c => applyStyle(c, { bg: '92D050', bold: true, border: true }))
+    // Category total row — placeholder, filled with formulas after all sub-groups are written
+    const catRow = ws.addRow([CAT_LABELS[catKey]])
+    applyStyle(catRow.getCell(1), { bg: '92D050', bold: true, border: true })
+    const catRn    = catRow.number
+    const sgRnList = []
 
     for (const subGrp of sortedSubGroups(subGrpSet, catKey, side)) {
-      // Sub-group total row — light blue (placed FIRST so collapse button sits here)
-      let sgTotal = 0
-      const sgTotals = mergedPerMonth.map(m => {
-        const s = Object.values(m[side][catKey]?.[subGrp] || {}).reduce((a, b) => a + b, 0)
-        sgTotal += s; return s || ''
-      })
-      const sgTotalRow = ws.addRow([`  ${subGrp}`, ...sgTotals, sgTotal || ''])
-      sgTotalRow.eachCell(c => applyStyle(c, { bg: 'D9D9D9', bold: true, border: true }))
-      sgTotalRow.outlineLevel = 1
+      // Sub-group total row — placeholder, filled after its ledger rows are written
+      const sgRow = ws.addRow([`  ${subGrp}`])
+      applyStyle(sgRow.getCell(1), { bg: 'D9D9D9', bold: true, border: true })
+      sgRow.outlineLevel = 1
+      const sgRn = sgRow.number
+      sgRnList.push(sgRn)
 
-      // Collect all ledger names within this sub-group
       const ledgerSet = new Set()
       mergedPerMonth.forEach(m => Object.keys(m[side][catKey]?.[subGrp] || {}).forEach(l => ledgerSet.add(l)))
 
-      // Ledger rows — deepest level, outline 2
+      let ledFirst = null, ledLast = null
       for (const ledger of ledgerSet) {
-        let total = 0
-        const amts = mergedPerMonth.map(m => {
-          const v = m[side][catKey]?.[subGrp]?.[ledger] || 0; total += v; return v || ''
-        })
-        const ledgerRow = ws.addRow([`    ${ledger}`, ...amts, total || ''])
-        ledgerRow.eachCell(c => applyStyle(c, { border: true }))
-        ledgerRow.outlineLevel = 2
+        const amts = mergedPerMonth.map(m => m[side][catKey]?.[subGrp]?.[ledger] || 0)
+        const r    = ws.addRow([`    ${ledger}`, ...amts])
+        const rn   = r.number
+        if (ledFirst === null) ledFirst = rn
+        ledLast = rn
+        r.getCell(totalCol).value = { formula: `SUM(B${rn}:${lastMthLtr}${rn})` }
+        applyStyle(r.getCell(1), { border: true })
+        for (let c = 2; c <= totalCol; c++) styleNum(r.getCell(c), { border: true })
+        r.outlineLevel = 2
       }
+
+      // Fill sub-group total row: SUM of its ledger rows
+      for (let i = 0; i < months.length; i++) {
+        const col  = i + 2
+        const cell = sgRow.getCell(col)
+        cell.value = ledFirst !== null
+          ? { formula: `SUM(${cletter(col)}${ledFirst}:${cletter(col)}${ledLast})` }
+          : 0
+        styleNum(cell, { bg: 'D9D9D9', bold: true, border: true })
+      }
+      const sgTotCell = sgRow.getCell(totalCol)
+      sgTotCell.value = { formula: `SUM(B${sgRn}:${lastMthLtr}${sgRn})` }
+      styleNum(sgTotCell, { bg: 'D9D9D9', bold: true, border: true })
     }
+
+    // Fill category total row: SUM of sub-group total rows (non-contiguous)
+    for (let i = 0; i < months.length; i++) {
+      const col  = i + 2
+      const cell = catRow.getCell(col)
+      cell.value = sgRnList.length > 0
+        ? { formula: `SUM(${sgRnList.map(rn => `${cletter(col)}${rn}`).join(',')})` }
+        : 0
+      styleNum(cell, { bg: '92D050', bold: true, border: true })
+    }
+    const catTotCell = catRow.getCell(totalCol)
+    catTotCell.value = sgRnList.length > 0
+      ? { formula: `SUM(${sgRnList.map(rn => `${cletter(totalCol)}${rn}`).join(',')})` }
+      : 0
+    styleNum(catTotCell, { bg: '92D050', bold: true, border: true })
 
     ws.addRow([])
   }
@@ -350,42 +378,69 @@ function buildSummarySheet(wb, banks, months) {
   ws.getColumn(1).width = 22
   months.forEach((_, i) => { ws.getColumn(i + 2).width = 14 })
 
-  // Header row — light blue
   ws.addRow(['', ...months])
     .eachCell(c => applyStyle(c, { bg: 'BDD7EE', bold: true, border: true }))
 
+  const lastMthCol     = months.length + 1
+  const bankClosingRns = []
+
   for (const bank of banks) {
-    // Bank name — dark blue, white
     ws.addRow([bank.name])
       .eachCell(c => applyStyle(c, { bg: '4472C4', color: 'FFFFFF', bold: true, border: true }))
 
-    // Opening Balance (each month = prev month closing)
-    const openings = bank.months.map((m, i) => {
-      if (i === 0) return (bank.openingDr ? 1 : -1) * bank.openingBalance
-      const prev = bank.months[i - 1]
-      return (prev.closingDr ? 1 : -1) * prev.closingBalance
-    })
-    ws.addRow(['Opening Balance', ...openings])
-      .eachCell(c => applyStyle(c, { border: true }))
+    // Opening Balance — first month is the actual value; subsequent months reference prev closing
+    const openRow = ws.addRow(['Opening Balance'])
+    applyStyle(openRow.getCell(1), { border: true })
+    const openRn = openRow.number
+    openRow.getCell(2).value = (bank.openingDr ? 1 : -1) * bank.openingBalance
+    styleNum(openRow.getCell(2), { border: true })
 
-    ws.addRow(['In (Debit)',   ...bank.months.map(m => m.debit  || '')])
-      .eachCell(c => applyStyle(c, { border: true }))
-    ws.addRow(['Out (Credit)', ...bank.months.map(m => m.credit || '')])
-      .eachCell(c => applyStyle(c, { border: true }))
+    // In (Debit) — raw values
+    const inRow = ws.addRow(['In (Debit)', ...bank.months.map(m => m.debit || 0)])
+    applyStyle(inRow.getCell(1), { border: true })
+    for (let c = 2; c <= lastMthCol; c++) styleNum(inRow.getCell(c), { border: true })
+    const inRn = inRow.number
 
-    // Closing Balance — light green
-    ws.addRow([`${bank.name} Balance`, ...bank.months.map(m => (m.closingDr ? 1 : -1) * m.closingBalance)])
-      .eachCell(c => applyStyle(c, { bg: 'C6EFCE', color: '375623', bold: true, border: true }))
+    // Out (Credit) — raw values
+    const outRow = ws.addRow(['Out (Credit)', ...bank.months.map(m => m.credit || 0)])
+    applyStyle(outRow.getCell(1), { border: true })
+    for (let c = 2; c <= lastMthCol; c++) styleNum(outRow.getCell(c), { border: true })
+    const outRn = outRow.number
+
+    // Closing Balance = Opening + In − Out
+    const closRow = ws.addRow([`${bank.name} Balance`])
+    applyStyle(closRow.getCell(1), { bg: 'C6EFCE', color: '375623', bold: true, border: true })
+    const closRn = closRow.number
+    for (let i = 0; i < months.length; i++) {
+      const col  = i + 2
+      const cell = closRow.getCell(col)
+      cell.value = { formula: `${cletter(col)}${openRn}+${cletter(col)}${inRn}-${cletter(col)}${outRn}` }
+      styleNum(cell, { bg: 'C6EFCE', color: '375623', bold: true, border: true })
+    }
+    bankClosingRns.push(closRn)
+
+    // Back-fill opening balance month 2+ = prev month closing (same sheet reference)
+    for (let i = 1; i < months.length; i++) {
+      const col  = i + 2
+      const cell = openRow.getCell(col)
+      cell.value = { formula: `${cletter(col - 1)}${closRn}` }
+      styleNum(cell, { border: true })
+    }
 
     ws.addRow([])
   }
 
-  // Total Balance — light orange
-  const totals = months.map((_, i) =>
-    banks.reduce((s, b) => s + (b.months[i] ? (b.months[i].closingDr ? 1 : -1) * b.months[i].closingBalance : 0), 0)
-  )
-  ws.addRow(['Total Balance', ...totals])
-    .eachCell(c => applyStyle(c, { bg: 'FCE4D6', color: '833C00', bold: true, border: true }))
+  // Total Balance = SUM of all bank closing rows per month
+  const totRow = ws.addRow(['Total Balance'])
+  applyStyle(totRow.getCell(1), { bg: 'FCE4D6', color: '833C00', bold: true, border: true })
+  for (let i = 0; i < months.length; i++) {
+    const col  = i + 2
+    const cell = totRow.getCell(col)
+    cell.value = bankClosingRns.length > 0
+      ? { formula: `SUM(${bankClosingRns.map(rn => `${cletter(col)}${rn}`).join(',')})` }
+      : 0
+    styleNum(cell, { bg: 'FCE4D6', color: '833C00', bold: true, border: true })
+  }
 }
 
 async function exportToExcel(ledgers) {

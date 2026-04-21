@@ -122,39 +122,94 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
           .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
       }
 
-      function writeItemSection(ws, item, headerName) {
-        ws.addRow([headerName])
-          .eachCell(c => applyStyle(c, { bold: true, border: true }))
+      function cletter(n) {
+        let s = ''; while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); } return s;
+      }
+      const FMT           = '#,##0.00'
+      const totalCol      = months.length + 2
+      const lastMonthCol  = months.length + 1
+      const lastMonthLtr  = cletter(lastMonthCol)
+      const totalColLtr   = cletter(totalCol)
 
+      function writeLedgerRow(ws, label, amounts) {
+        const r  = ws.addRow([`        ${label}`, ...amounts])
+        const rn = r.number
+        r.getCell(totalCol).value  = { formula: `SUM(B${rn}:${lastMonthLtr}${rn})` }
+        for (let c = 1; c <= totalCol; c++) {
+          const cell = r.getCell(c)
+          if (c > 1) cell.numFmt = FMT
+          applyStyle(cell, { border: true })
+        }
+        return rn
+      }
+
+      function writeTotalRow(ws, label, firstDataRow, lastDataRow, fallbackVals) {
+        const row = ws.addRow([label])
+        applyStyle(row.getCell(1), { bold: true, border: 'medium' })
+        const rn = row.number
+        for (let i = 0; i < months.length; i++) {
+          const col  = i + 2
+          const cell = row.getCell(col)
+          cell.value = (firstDataRow !== null)
+            ? { formula: `SUM(${cletter(col)}${firstDataRow}:${cletter(col)}${lastDataRow})` }
+            : (fallbackVals[i] || 0)
+          cell.numFmt = FMT
+          applyStyle(cell, { bold: true, border: 'medium' })
+        }
+        const totCell   = row.getCell(totalCol)
+        totCell.value   = { formula: `SUM(B${rn}:${lastMonthLtr}${rn})` }
+        totCell.numFmt  = FMT
+        applyStyle(totCell, { bold: true, border: 'medium' })
+        return rn
+      }
+
+      function writeItemSection(ws, item, headerName) {
+        ws.addRow([headerName]).eachCell(c => applyStyle(c, { bold: true, border: true }))
+
+        let creditFirst = null, creditLast = null
         if (item.grandCredit > 0) {
           ws.addRow([`    ${item.name} — Fee Received`, ...months.map(() => ''), ''])
             .eachCell(c => applyStyle(c, { border: true }))
           for (const d of buildLedgerDetails(item, months, 'credit')) {
-            ws.addRow([`        ${d.label}`, ...d.amounts, d.total || ''])
-              .eachCell(c => applyStyle(c, { border: true }))
+            const rn = writeLedgerRow(ws, d.label, d.amounts)
+            if (creditFirst === null) creditFirst = rn
+            creditLast = rn
           }
         }
         ws.addRow([])
-        ws.addRow(['  Total Fee Received', ...months.map(ml => getItemMonthVal(item, ml, 'credit') || ''), item.grandCredit || ''])
-          .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+        const feeRn = writeTotalRow(ws, '  Total Fee Received', creditFirst, creditLast,
+          months.map(ml => getItemMonthVal(item, ml, 'credit')))
         ws.addRow([])
 
+        let debitFirst = null, debitLast = null
         if (item.grandDebit > 0) {
           ws.addRow([`    ${item.name} — Expenses`, ...months.map(() => ''), ''])
             .eachCell(c => applyStyle(c, { border: true }))
           for (const d of buildLedgerDetails(item, months, 'debit')) {
-            ws.addRow([`        ${d.label}`, ...d.amounts, d.total || ''])
-              .eachCell(c => applyStyle(c, { border: true }))
+            const rn = writeLedgerRow(ws, d.label, d.amounts)
+            if (debitFirst === null) debitFirst = rn
+            debitLast = rn
           }
         }
         ws.addRow([])
-        ws.addRow(['  Total Expenses', ...months.map(ml => getItemMonthVal(item, ml, 'debit') || ''), item.grandDebit || ''])
-          .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+        const expRn = writeTotalRow(ws, '  Total Expenses', debitFirst, debitLast,
+          months.map(ml => getItemMonthVal(item, ml, 'debit')))
         ws.addRow([])
 
-        const netTotal = item.grandCredit - item.grandDebit
-        ws.addRow(['  Net (Fee − Expenses)', ...months.map(ml => getItemMonthVal(item, ml, 'credit') - getItemMonthVal(item, ml, 'debit') || ''), netTotal || ''])
-          .eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+        // Net (Fee − Expenses) — formula referencing the two total rows
+        const netRow = ws.addRow(['  Net (Fee − Expenses)'])
+        applyStyle(netRow.getCell(1), { bold: true, border: 'medium' })
+        for (let i = 0; i < months.length; i++) {
+          const col  = i + 2
+          const cell = netRow.getCell(col)
+          cell.value  = { formula: `${cletter(col)}${feeRn}-${cletter(col)}${expRn}` }
+          cell.numFmt = FMT
+          applyStyle(cell, { bold: true, border: 'medium' })
+        }
+        const netTot   = netRow.getCell(totalCol)
+        netTot.value   = { formula: `${totalColLtr}${feeRn}-${totalColLtr}${expRn}` }
+        netTot.numFmt  = FMT
+        applyStyle(netTot, { bold: true, border: 'medium' })
         ws.addRow([])
       }
 
