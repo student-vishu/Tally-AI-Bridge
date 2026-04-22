@@ -43,15 +43,16 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         fetch('/api/asanify/employees').then(r => r.json()).catch(() => ({ success: false }))
       ])
 
-      const siteTeamNames = new Set()
+      const siteTeamNames    = new Set()
+      const centralTeamNames = new Set()
       if (rawEmpJson.success && Array.isArray(rawEmpJson.employees)) {
         for (const emp of rawEmpJson.employees) {
           const dept = (emp.DEPARTMENT_NAME || emp.DEPARTMENT || '').toLowerCase()
-          if (dept.includes('site')) {
-            const name = [emp.FIRST_NAME, emp.MIDDLE_NAME, emp.LAST_NAME]
-              .filter(Boolean).join(' ').trim().toLowerCase()
-            if (name) siteTeamNames.add(name)
-          }
+          const name = [emp.FIRST_NAME, emp.MIDDLE_NAME, emp.LAST_NAME]
+            .filter(Boolean).join(' ').trim().toLowerCase()
+          if (!name) continue
+          if (dept.includes('site')) siteTeamNames.add(name)
+          if (dept.includes('executive') || dept.includes('qa')) centralTeamNames.add(name)
         }
       }
 
@@ -104,16 +105,31 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
 
       function buildLedgerDetails(item, monthLabels, side) {
         const map = {}
+        const catMap = {}
         for (const mo of item.months || []) {
           for (const e of mo.entries || []) {
             if (!(e[side] > 0)) continue
             const label = e.party ? `${e.ledger} ↳ ${e.party}` : e.ledger
-            if (!map[label]) map[label] = {}
+            if (!map[label]) {
+              map[label] = {}
+              if (side === 'debit') {
+                const ledger = (e.ledger || '').trim().toLowerCase()
+                const party  = (e.party  || '').trim().toLowerCase()
+                const isSalary     = ledger.includes('salary')
+                const isSiteEmp    = [...siteTeamNames].some(n => party.includes(n))
+                const isCentralEmp = [...centralTeamNames].some(n => party.includes(n))
+                if      (isSalary && isSiteEmp)    catMap[label] = 'siteSalary'
+                else if (!isSalary && isSiteEmp)   catMap[label] = 'siteOverhead'
+                else if (isSalary && isCentralEmp) catMap[label] = 'centralSalary'
+                else                               catMap[label] = 'other'
+              }
+            }
             map[label][mo.month] = (map[label][mo.month] || 0) + e[side]
           }
         }
         return Object.entries(map).map(([label, byMonth]) => ({
           label,
+          category: catMap[label],
           amounts: monthLabels.map(ml => byMonth[ml] || ''),
           total: Object.values(byMonth).reduce((s, v) => s + v, 0),
         }))
@@ -196,6 +212,9 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         ws.addRow([])
 
         let debitFirst = null, debitLast = null
+        const siteSalaryRows   = []
+        const siteOverheadRows = []
+        const centralSalaryRows = []
         if (item.grandDebit > 0) {
           ws.addRow([`    ${item.name} — Expenses`, ...months.map(() => ''), ''])
             .eachCell(c => applyStyle(c, { border: true }))
@@ -203,6 +222,9 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
             const rn = writeLedgerRow(ws, d.label, d.amounts)
             if (debitFirst === null) debitFirst = rn
             debitLast = rn
+            if      (d.category === 'siteSalary')    siteSalaryRows.push(rn)
+            else if (d.category === 'siteOverhead')  siteOverheadRows.push(rn)
+            else if (d.category === 'centralSalary') centralSalaryRows.push(rn)
           }
         }
         ws.addRow([])
@@ -225,59 +247,35 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         netTot.numFmt  = FMT
         applyStyle(netTot, { bold: true, border: 'medium' })
 
-        // Site Salary Direct — only for project sheets, not establishment
+        // Site Salary Direct / Overhead / Central Site Variable — only for project sheets
         if (!isProject) { ws.addRow([]); return }
         ws.addRow([])
         ws.addRow([])
-        const siteSalaryAmounts = months.map(ml => {
-          const mo = item.months?.find(m => m.month === ml)
-          if (!mo) return 0
-          return (mo.entries || []).reduce((sum, e) => {
-            if (!(e.debit > 0)) return sum
-            const ledger = (e.ledger || '').trim().toLowerCase()
-            const party  = (e.party  || '').trim().toLowerCase()
-            const isSalaryLedger = ledger.includes('salary')
-            const matched = isSalaryLedger && [...siteTeamNames].some(name => party.includes(name))
-            return matched ? sum + e.debit : sum
-          }, 0)
-        })
-        const ssRow = ws.addRow(['  Site Salary Direct', ...siteSalaryAmounts])
-        applyStyle(ssRow.getCell(1), { bold: true, border: 'medium' })
-        const ssRn = ssRow.number
-        for (let i = 0; i < months.length; i++) {
-          const cell = ssRow.getCell(i + 2)
-          cell.numFmt = FMT
-          applyStyle(cell, { bold: true, border: 'medium' })
-        }
-        const ssTotCell = ssRow.getCell(totalCol)
-        ssTotCell.value  = { formula: `SUM(B${ssRn}:${lastMonthLtr}${ssRn})` }
-        ssTotCell.numFmt = FMT
-        applyStyle(ssTotCell, { bold: true, border: 'medium' })
 
-        // Site Overhead — non-salary expenses where party is a site team employee
-        const siteOverheadAmounts = months.map(ml => {
-          const mo = item.months?.find(m => m.month === ml)
-          if (!mo) return 0
-          return (mo.entries || []).reduce((sum, e) => {
-            if (!(e.debit > 0)) return sum
-            const ledger = (e.ledger || '').trim().toLowerCase()
-            const party  = (e.party  || '').trim().toLowerCase()
-            const matched = !ledger.includes('salary') && [...siteTeamNames].some(name => party.includes(name))
-            return matched ? sum + e.debit : sum
-          }, 0)
-        })
-        const soRow = ws.addRow(['  Site Overhead', ...siteOverheadAmounts])
-        applyStyle(soRow.getCell(1), { bold: true, border: 'medium' })
-        const soRn = soRow.number
-        for (let i = 0; i < months.length; i++) {
-          const cell = soRow.getCell(i + 2)
-          cell.numFmt = FMT
-          applyStyle(cell, { bold: true, border: 'medium' })
+        function makeRefFormula(col, rowNums) {
+          if (rowNums.length === 0) return 0
+          return { formula: `SUM(${rowNums.map(rn => `${cletter(col)}${rn}`).join(',')})` }
         }
-        const soTotCell = soRow.getCell(totalCol)
-        soTotCell.value  = { formula: `SUM(B${soRn}:${lastMonthLtr}${soRn})` }
-        soTotCell.numFmt = FMT
-        applyStyle(soTotCell, { bold: true, border: 'medium' })
+        function writeCalcRow(ws, label, rowNums) {
+          const row = ws.addRow([label])
+          applyStyle(row.getCell(1), { bold: true, border: 'medium' })
+          const rn = row.number
+          for (let i = 0; i < months.length; i++) {
+            const col  = i + 2
+            const cell = row.getCell(col)
+            cell.value  = makeRefFormula(col, rowNums)
+            cell.numFmt = FMT
+            applyStyle(cell, { bold: true, border: 'medium' })
+          }
+          const totCell = row.getCell(totalCol)
+          totCell.value  = { formula: `SUM(B${rn}:${lastMonthLtr}${rn})` }
+          totCell.numFmt = FMT
+          applyStyle(totCell, { bold: true, border: 'medium' })
+        }
+
+        writeCalcRow(ws, '  Site Salary Direct',   siteSalaryRows)
+        writeCalcRow(ws, '  Site Overhead',         siteOverheadRows)
+        writeCalcRow(ws, '  Central Site Variable', centralSalaryRows)
 
         ws.addRow([])
       }
