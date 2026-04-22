@@ -27,19 +27,33 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         if (cfg.success) { companyName = cfg.data.companyName || ''; fyLabel = cfg.data.fyLabel || '' }
       } catch { /* use empty strings */ }
 
-      // Fetch each project's expand data in parallel using the same API the UI expand uses.
-      // This guarantees the project name key matches row.project exactly.
-      const expandResults = await Promise.all(
-        data.map(async row => {
-          try {
-            const sep = queryParams ? '&' : '?'
-            const res  = await fetch(`/api/dashboard/project-cashflow-expand${queryParams}${sep}project=${encodeURIComponent(row.project)}`)
-            const json = await res.json()
-            if (json.success && json.data) return json.data
-          } catch { /* ignored */ }
-          return { project: row.project, items: [], from: null, to: null }
-        })
-      )
+      // Fetch each project's expand data in parallel with employee data
+      const [expandResults, rawEmpJson] = await Promise.all([
+        Promise.all(
+          data.map(async row => {
+            try {
+              const sep = queryParams ? '&' : '?'
+              const res  = await fetch(`/api/dashboard/project-cashflow-expand${queryParams}${sep}project=${encodeURIComponent(row.project)}`)
+              const json = await res.json()
+              if (json.success && json.data) return json.data
+            } catch { /* ignored */ }
+            return { project: row.project, items: [], from: null, to: null }
+          })
+        ),
+        fetch('/api/asanify/employees').then(r => r.json()).catch(() => ({ success: false }))
+      ])
+
+      const siteTeamNames = new Set()
+      if (rawEmpJson.success && Array.isArray(rawEmpJson.employees)) {
+        for (const emp of rawEmpJson.employees) {
+          const dept = (emp.DEPARTMENT_NAME || emp.DEPARTMENT || '').toLowerCase()
+          if (dept.includes('site')) {
+            const name = [emp.FIRST_NAME, emp.MIDDLE_NAME, emp.LAST_NAME]
+              .filter(Boolean).join(' ').trim().toLowerCase()
+            if (name) siteTeamNames.add(name)
+          }
+        }
+      }
 
       const allExpandData = {}
       let from = '', to = ''
@@ -163,7 +177,7 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         return rn
       }
 
-      function writeItemSection(ws, item, headerName) {
+      function writeItemSection(ws, item, headerName, isProject = false) {
         ws.addRow([headerName]).eachCell(c => applyStyle(c, { bold: true, border: true }))
 
         let creditFirst = null, creditLast = null
@@ -210,6 +224,61 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         netTot.value   = { formula: `${totalColLtr}${feeRn}-${totalColLtr}${expRn}` }
         netTot.numFmt  = FMT
         applyStyle(netTot, { bold: true, border: 'medium' })
+
+        // Site Salary Direct — only for project sheets, not establishment
+        if (!isProject) { ws.addRow([]); return }
+        ws.addRow([])
+        ws.addRow([])
+        const siteSalaryAmounts = months.map(ml => {
+          const mo = item.months?.find(m => m.month === ml)
+          if (!mo) return 0
+          return (mo.entries || []).reduce((sum, e) => {
+            if (!(e.debit > 0)) return sum
+            const ledger = (e.ledger || '').trim().toLowerCase()
+            const party  = (e.party  || '').trim().toLowerCase()
+            const isSalaryLedger = ledger.includes('salary')
+            const matched = isSalaryLedger && [...siteTeamNames].some(name => party.includes(name))
+            return matched ? sum + e.debit : sum
+          }, 0)
+        })
+        const ssRow = ws.addRow(['  Site Salary Direct', ...siteSalaryAmounts])
+        applyStyle(ssRow.getCell(1), { bold: true, border: 'medium' })
+        const ssRn = ssRow.number
+        for (let i = 0; i < months.length; i++) {
+          const cell = ssRow.getCell(i + 2)
+          cell.numFmt = FMT
+          applyStyle(cell, { bold: true, border: 'medium' })
+        }
+        const ssTotCell = ssRow.getCell(totalCol)
+        ssTotCell.value  = { formula: `SUM(B${ssRn}:${lastMonthLtr}${ssRn})` }
+        ssTotCell.numFmt = FMT
+        applyStyle(ssTotCell, { bold: true, border: 'medium' })
+
+        // Site Overhead — non-salary expenses where party is a site team employee
+        const siteOverheadAmounts = months.map(ml => {
+          const mo = item.months?.find(m => m.month === ml)
+          if (!mo) return 0
+          return (mo.entries || []).reduce((sum, e) => {
+            if (!(e.debit > 0)) return sum
+            const ledger = (e.ledger || '').trim().toLowerCase()
+            const party  = (e.party  || '').trim().toLowerCase()
+            const matched = !ledger.includes('salary') && [...siteTeamNames].some(name => party.includes(name))
+            return matched ? sum + e.debit : sum
+          }, 0)
+        })
+        const soRow = ws.addRow(['  Site Overhead', ...siteOverheadAmounts])
+        applyStyle(soRow.getCell(1), { bold: true, border: 'medium' })
+        const soRn = soRow.number
+        for (let i = 0; i < months.length; i++) {
+          const cell = soRow.getCell(i + 2)
+          cell.numFmt = FMT
+          applyStyle(cell, { bold: true, border: 'medium' })
+        }
+        const soTotCell = soRow.getCell(totalCol)
+        soTotCell.value  = { formula: `SUM(B${soRn}:${lastMonthLtr}${soRn})` }
+        soTotCell.numFmt = FMT
+        applyStyle(soTotCell, { bold: true, border: 'medium' })
+
         ws.addRow([])
       }
 
@@ -230,16 +299,16 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
           for (const item of projectItems) {
             const ws = wb.addWorksheet(makeSheetName(item.name))
             setupSheet(ws)
-            writeItemSection(ws, item, item.name)
+            writeItemSection(ws, item, item.name, true)
           }
         } else {
           // Establishment items OR single-CC projects — one sheet per project (unchanged)
           const ws = wb.addWorksheet(makeSheetName(row.project))
           setupSheet(ws)
-          if (projectItems.length === 1) writeItemSection(ws, projectItems[0], row.project)
+          if (projectItems.length === 1) writeItemSection(ws, projectItems[0], row.project, isProjectsCategory)
           else if (projectItems.length > 1) {
             // Establishment: write all sub-CCs stacked on one sheet
-            for (const item of projectItems) writeItemSection(ws, item, item.name)
+            for (const item of projectItems) writeItemSection(ws, item, item.name, false)
           }
         }
       }
