@@ -94,13 +94,17 @@ function generateMonthSlots(from, to) {
 }
 
 // ─── Parse CC allocations from FY Voucher Collection XML ─────────────────────
-// Returns { monthlyMap, ledgerMap }
+// Returns { monthlyMap, ledgerMap, pairMap }
 //   monthlyMap : Map<ccName, Map<YYYYMM, {debit, credit}>>
 //   ledgerMap  : Map<ccName, Map<YYYYMM, Map<ledgerName, {debit, credit}>>>
+//   pairMap    : Map<projectCC, Map<expTypeCCLower, Map<"YYYYMM::ledger||party", amount>>>
+//                Records which expense type CC each project CC entry was paired with
+//                in the same voucher line — used for accurate per-project expense type rows.
 // Sign convention (from transformer.services.js): +AMOUNT = Credit, -AMOUNT = Debit
 function parseCCAllocationsFromVouchers(raw) {
     const monthlyMap   = new Map();
     const ledgerMap    = new Map();
+    const pairMap      = new Map();
     const voucherRegex = /<VOUCHER\b[^>]*>([\s\S]*?)<\/VOUCHER>/g;
     let vMatch;
 
@@ -140,12 +144,23 @@ function parseCCAllocationsFromVouchers(raw) {
             const ledger = ledgerNameM ? decodeXml(ledgerNameM[1].trim()) : 'Unknown';
 
             // Path 1: CATEGORYALLOCATIONS.LIST → COSTCENTREALLOCATIONS.LIST
+            // Also captures catGroups (category → CCs) for pairMap building below.
+            const catGroups = []; // [{ catName, ccs: [{name, amount}] }]
             const catRegex = /<CATEGORYALLOCATIONS\.LIST>([\s\S]*?)<\/CATEGORYALLOCATIONS\.LIST>/g;
             let cMatch;
             while ((cMatch = catRegex.exec(eBody)) !== null) {
-                const ccRegex = /<COSTCENTREALLOCATIONS\.LIST>([\s\S]*?)<\/COSTCENTREALLOCATIONS\.LIST>/g;
+                const catNameM = cMatch[1].match(/<CATEGORY[^>]*>([^<]*)<\/CATEGORY>/);
+                const catName  = catNameM ? decodeXml(catNameM[1].trim()) : '';
+                const catCCs   = [];
+                const ccRegex  = /<COSTCENTREALLOCATIONS\.LIST>([\s\S]*?)<\/COSTCENTREALLOCATIONS\.LIST>/g;
                 let ccMatch;
-                while ((ccMatch = ccRegex.exec(cMatch[1])) !== null) ccBodies.push(ccMatch[1]);
+                while ((ccMatch = ccRegex.exec(cMatch[1])) !== null) {
+                    ccBodies.push(ccMatch[1]);
+                    const nameM = ccMatch[1].match(/<NAME[^>]*>([^<]+)<\/NAME>/);
+                    const amtM  = ccMatch[1].match(/<AMOUNT[^>]*>([^<]+)<\/AMOUNT>/);
+                    if (nameM && amtM) catCCs.push({ name: decodeXml(nameM[1].trim()), amount: parseFloat(amtM[1].trim()) || 0 });
+                }
+                if (catCCs.length > 0) catGroups.push({ catName, ccs: catCCs });
             }
 
             // Path 2: direct COSTCENTREALLOCATIONS.LIST (only if Path 1 found nothing)
@@ -200,10 +215,47 @@ function parseCCAllocationsFromVouchers(raw) {
                 else            lprev.debit  += Math.abs(amount);
                 ledgerMonthMap.set(compositeKey, lprev);
             }
+
+            // ── pairMap: pair expense type CCs with project/establishment CCs ──
+            // "Expense Type" category CCs (Site Salary Direct, etc.) are identified by
+            // category name containing "expense". All other categories are project/establishment.
+            if (catGroups.length >= 2) {
+                const expGroups  = catGroups.filter(g => g.catName.toLowerCase().includes('expense'));
+                const projGroups = catGroups.filter(g => !g.catName.toLowerCase().includes('expense'));
+                if (expGroups.length > 0 && projGroups.length > 0) {
+                    // Determine party for this ledger entry (same as existing logic)
+                    let pairParty = voucherParty;
+                    if (!pairParty) {
+                        const firstDebit = projGroups[0]?.ccs.find(c => c.amount < 0);
+                        if (firstDebit) {
+                            const opp = allVoucherEntries.filter(e => e.amount > 0);
+                            if (opp.length > 0) pairParty = opp.reduce((a, b) => Math.abs(a.amount) > Math.abs(b.amount) ? a : b).ledger;
+                        }
+                    }
+                    const ckKey = `${monthKey}::${ledger}||${pairParty}`;
+                    for (const pg of projGroups) {
+                        for (const projCC of pg.ccs) {
+                            if (projCC.amount >= 0) continue; // only debit entries
+                            const amt = Math.abs(projCC.amount);
+                            if (!pairMap.has(projCC.name)) pairMap.set(projCC.name, new Map());
+                            const etLvl = pairMap.get(projCC.name);
+                            for (const eg of expGroups) {
+                                for (const etCC of eg.ccs) {
+                                    if (etCC.amount >= 0) continue;
+                                    const etKey = etCC.name.toLowerCase();
+                                    if (!etLvl.has(etKey)) etLvl.set(etKey, new Map());
+                                    const ckMap = etLvl.get(etKey);
+                                    ckMap.set(ckKey, (ckMap.get(ckKey) || 0) + amt);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    return { monthlyMap, ledgerMap };
+    return { monthlyMap, ledgerMap, pairMap };
 }
 
 // ─── Build monthly items for a list of CC names ───────────────────────────────
@@ -283,10 +335,10 @@ async function fetchCCAllocations(from, to, tallyUrl, company = null) {
     const inflight = (async () => {
         try {
             const raw  = await callTally(buildFYVouchersXML(from, to, company), 35000, tallyUrl);
-            const { monthlyMap, ledgerMap } = parseCCAllocationsFromVouchers(raw);
+            const { monthlyMap, ledgerMap, pairMap } = parseCCAllocationsFromVouchers(raw);
             console.log(`[ccAlloc] Parsed ${monthlyMap.size} cost centres from FY vouchers`);
             if (monthlyMap.size > 0) {
-                const data = { monthlyMap, ledgerMap };
+                const data = { monthlyMap, ledgerMap, pairMap };
                 _ccAllocCaches.set(cacheKey, { data, time: Date.now() });
                 return data;
             }
@@ -300,7 +352,7 @@ async function fetchCCAllocations(from, to, tallyUrl, company = null) {
                 const lastKey = to.substring(0, 6); // YYYYMM of period end
                 synth.set(name, new Map([[lastKey, { debit, credit }]]));
             }
-            const data = { monthlyMap: synth, ledgerMap: new Map() };
+            const data = { monthlyMap: synth, ledgerMap: new Map(), pairMap: new Map() };
             _ccAllocCaches.set(cacheKey, { data, time: Date.now() });
             return data;
         } catch (err) {
@@ -309,7 +361,7 @@ async function fetchCCAllocations(from, to, tallyUrl, company = null) {
             const synth = new Map();
             const lastKey = to.substring(0, 6);
             for (const [name, { debit, credit }] of flat) synth.set(name, new Map([[lastKey, { debit, credit }]]));
-            return { monthlyMap: synth, ledgerMap: new Map() };
+            return { monthlyMap: synth, ledgerMap: new Map(), pairMap: new Map() };
         } finally {
             _ccAllocInflights.delete(cacheKey);
         }
@@ -318,9 +370,24 @@ async function fetchCCAllocations(from, to, tallyUrl, company = null) {
     return inflight;
 }
 
+// ─── Serialize pairMap entries for a list of CC names ────────────────────────
+// Returns { [ccName]: { [etCCLower]: { ["YYYYMM::ledger||party"]: amount } } }
+function serializeExpTypePairs(pairMap, namesToShow) {
+    const out = {};
+    for (const ccName of namesToShow) {
+        const etMap = pairMap.get(ccName);
+        if (!etMap) continue;
+        out[ccName] = {};
+        for (const [etKey, ckMap] of etMap) {
+            out[ccName][etKey] = Object.fromEntries(ckMap);
+        }
+    }
+    return out;
+}
+
 // ─── All projects expand ──────────────────────────────────────────────────────
 exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
-    const [{ childrenMap, parentMap }, costCategories, { monthlyMap: ccMonthlyMap, ledgerMap }] = await Promise.all([
+    const [{ childrenMap, parentMap }, costCategories, { monthlyMap: ccMonthlyMap, ledgerMap, pairMap }] = await Promise.all([
         fetchCostCentreHierarchy(tallyUrl, company),
         fetchCostCategories(tallyUrl, company),
         fetchCCAllocations(from, to, tallyUrl, company)
@@ -347,7 +414,10 @@ exports.fetchAllProjectsExpand = async (from, to, tallyUrl, company = null) => {
         const namesToShow = [projectName, ...children];
         const items       = buildMonthlyItems(ccMonthlyMap, namesToShow, from, to, ledgerMap)
             .filter(item => item.grandDebit > 0 || item.grandCredit > 0);
-        if (items.length > 0) result.push({ project: projectName, from, to, items });
+        if (items.length > 0) {
+            const expTypePairs = serializeExpTypePairs(pairMap, namesToShow);
+            result.push({ project: projectName, from, to, items, expTypePairs });
+        }
     }
     return result;
 };
@@ -363,7 +433,7 @@ exports.warmFYCache = async (from, tallyUrl, company = null) => {
 
 // ─── Single project expand ────────────────────────────────────────────────────
 exports.fetchProjectExpand = async (projectName, from, to, tallyUrl, company = null) => {
-    const [{ childrenMap }, costCategories, { monthlyMap: ccMonthlyMap, ledgerMap }] = await Promise.all([
+    const [{ childrenMap }, costCategories, { monthlyMap: ccMonthlyMap, ledgerMap, pairMap }] = await Promise.all([
         fetchCostCentreHierarchy(tallyUrl, company),
         fetchCostCategories(tallyUrl, company),
         fetchCCAllocations(from, to, tallyUrl, company)
@@ -372,6 +442,7 @@ exports.fetchProjectExpand = async (projectName, from, to, tallyUrl, company = n
     const catSet      = new Set(costCategories.map(c => c.toLowerCase()));
     const children    = (childrenMap[projectName] || []).filter(c => !catSet.has(c.toLowerCase()));
     const namesToShow = [projectName, ...children];
-
-    return buildMonthlyItems(ccMonthlyMap, namesToShow, from, to, ledgerMap);
+    const items       = buildMonthlyItems(ccMonthlyMap, namesToShow, from, to, ledgerMap);
+    const expTypePairs = serializeExpTypePairs(pairMap, namesToShow);
+    return { items, expTypePairs };
 };

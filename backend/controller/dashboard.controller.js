@@ -94,8 +94,8 @@ exports.getProjectCashFlowExpand = async (req, res, next) => {
         const { from, to, company } = resolvePeriod(req);
         if (!from) return res.json({ success: true, data: { project, items: [] } });
 
-        const items = await fetchProjectExpand(project, from, to, tallyUrl, company);
-        res.json({ success: true, data: { project, from, to, items } });
+        const { items, expTypePairs } = await fetchProjectExpand(project, from, to, tallyUrl, company);
+        res.json({ success: true, data: { project, from, to, items, expTypePairs } });
     } catch (err) {
         next(err);
     }
