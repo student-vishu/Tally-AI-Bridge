@@ -306,7 +306,7 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         applyStyle(netTot, { bold: true, border: 'medium' })
 
         // 4 expense type rows — only for project sheets, sourced from Tally expense type cost centres
-        if (!isProject) { ws.addRow([]); return }
+        if (!isProject) { ws.addRow([]); return null }
         ws.addRow([])
         ws.addRow([])
 
@@ -341,14 +341,16 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
           totCell.value  = { formula: `SUM(B${rn}:${lastMonthLtr}${rn})` }
           totCell.numFmt = FMT
           applyStyle(totCell, { bold: true, border: 'medium' })
+          return rn
         }
 
-        writeExpTypeRow('  Site Salary Direct',    'site salary direct')
-        writeExpTypeRow('  Site Overhead',          'site overhead')
-        writeExpTypeRow('  Central Site Variable',  'central site variable')
-        writeExpTypeRow('  Central Common Overhead','central common overhead')
+        const ssdRn = writeExpTypeRow('  Site Salary Direct',     'site salary direct')
+        const soRn  = writeExpTypeRow('  Site Overhead',           'site overhead')
+        const csvRn = writeExpTypeRow('  Central Site Variable',   'central site variable')
+        const ccoRn = writeExpTypeRow('  Central Common Overhead', 'central common overhead')
 
         ws.addRow([])
+        return { feeRn, ssdRn, soRn, csvRn, ccoRn }
       }
 
       // Reserve P&L Summary as tab #1, Overhead as tab #2 — both populated after project sheets
@@ -360,6 +362,10 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         const cat = (r.category || '').toLowerCase()
         return cat.includes('project')
       })?.category || 'Projects'
+
+      // Maps used by P&L Summary to build cross-sheet formula references
+      const sheetItemRefs   = {}  // sheetName → { feeRn, ssdRn, soRn, csvRn, ccoRn }
+      const itemNameToSheet = {}  // item.name / row.project → actual Excel sheet name
 
       for (const row of data) {
         const allItems = (allExpandData[row.project]?.items || [])
@@ -375,167 +381,33 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         if (isProjectsCategory && projectItems.length > 1) {
           // Projects with multiple sub-CCs — one sheet per sub-CC
           for (const item of projectItems) {
-            const ws = wb.addWorksheet(makeSheetName(item.name))
+            const sn = makeSheetName(item.name)
+            itemNameToSheet[item.name] = sn
+            const ws = wb.addWorksheet(sn)
             setupSheet(ws)
-            writeItemSection(ws, item, item.name, true, expTypeItems, projectExpTypePairs[item.name] || null)
+            const refs = writeItemSection(ws, item, item.name, true, expTypeItems, projectExpTypePairs[item.name] || null)
+            if (refs) sheetItemRefs[sn] = refs
           }
         } else {
           // Establishment items OR single-CC projects — one sheet per project
-          const ws = wb.addWorksheet(makeSheetName(row.project))
+          const sn = makeSheetName(row.project)
+          itemNameToSheet[row.project] = sn
+          const ws = wb.addWorksheet(sn)
           setupSheet(ws)
-          if (projectItems.length === 1) writeItemSection(ws, projectItems[0], row.project, isProjectsCategory, expTypeItems, projectExpTypePairs[projectItems[0].name] || null)
-          else if (projectItems.length > 1) {
+          if (projectItems.length === 1) {
+            const refs = writeItemSection(ws, projectItems[0], row.project, isProjectsCategory, expTypeItems, projectExpTypePairs[projectItems[0].name] || null)
+            if (refs && isProjectsCategory) sheetItemRefs[sn] = refs
+          } else if (projectItems.length > 1) {
             // Establishment: write all sub-CCs stacked on one sheet
             for (const item of projectItems) writeItemSection(ws, item, item.name, false, {}, null)
           }
         }
       }
 
-      // ── P&L Summary Sheet ──────────────────────────────────────────────────────
-      {
-        const C = { sr:1, proj:2, totalIn:3, ssd:4, so:5, csv:6, cco:7, totalOut:8, pl:9, ratio:10 }
-        plWs.getColumn(C.sr).width      = 6
-        plWs.getColumn(C.proj).width    = 32
-        ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { plWs.getColumn(c).width = 18 })
-        plWs.getColumn(C.ratio).width   = 10
-        plWs.views = [{ state: 'frozen', xSplit: 0, ySplit: 2 }]
-
-        const fyTitle = (from && to)
-          ? `${MN[parseInt(from.substring(4,6))-1]} ${from.substring(0,4)} – ${MN[parseInt(to.substring(4,6))-1]} ${to.substring(0,4)}`
-          : ''
-
-        // Title row
-        const tRow = plWs.addRow([`Project P&L Summary  |  ${fyTitle}`, ...Array(9).fill('')])
-        plWs.mergeCells('A1:J1')
-        applyStyle(tRow.getCell(1), { bold: true, border: true })
-
-        // Column header row
-        const hRow = plWs.addRow(['Sr', 'Project', 'Total In', 'Site Salary Direct', 'Site Overhead', 'Central Site Variable', 'Central Common Overhead', 'Total Out', 'P & L', 'Ratio'])
-        hRow.eachCell(c => applyStyle(c, { bold: true, border: true }))
-
-        // Helper: sum expense type amounts from expTypePairs
-        const getExpTotal = (expTypePairs, etKey) => {
-          let t = 0
-          for (const etMap of Object.values(expTypePairs || {})) {
-            for (const amt of Object.values(etMap[etKey] || {})) t += amt
-          }
-          return t
-        }
-
-        const projRows = data.filter(r => r.category === projectsCategoryName)
-        let sr = 1, dataFirst = null, dataLast = null
-
-        // Write one flat P&L row; tracks dataFirst/dataLast for Sub Total range SUM
-        const addPlRow = (label, totalIn, ssd, so, csv, cco) => {
-          if (!totalIn && !ssd && !so && !csv && !cco) return  // skip all-zero rows
-          const rn = plWs.rowCount + 1
-          const pRow = plWs.addRow([
-            sr++, label, totalIn, ssd, so, csv, cco,
-            { formula: `SUM(D${rn}:G${rn})` },
-            { formula: `C${rn}-H${rn}` },
-            { formula: `IF(C${rn}>0,I${rn}/C${rn},0)` }
-          ])
-          pRow.eachCell(c => applyStyle(c, { border: true }))
-          ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { pRow.getCell(c).numFmt = FMT })
-          pRow.getCell(C.ratio).numFmt = '0.00%'
-          if (dataFirst === null) dataFirst = rn
-          dataLast = rn
-        }
-
-        for (const row of projRows) {
-          const items   = allExpandData[row.project]?.items || []
-          const etPairs = allExpandData[row.project]?.expTypePairs || {}
-          // Parent CC: has items with names OTHER than itself (e.g. Pmc has items Pmc+CSI+HVT)
-          const isParent = items.length > 0 && items.some(i => i.name !== row.project)
-
-          if (isParent) {
-            // One row per item — first the self-named item (parent's own direct data),
-            // then each sub-CC item (CSI PROJECT, HVT PROJECT, HLE, …)
-            // Sub Total sums ALL of these; total = same as the old single-row aggregate
-            for (const item of items) {
-              const sub = etPairs[item.name] ? { [item.name]: etPairs[item.name] } : {}
-              addPlRow(item.name,
-                item.grandCredit || 0,
-                getExpTotal(sub, 'site salary direct'),
-                getExpTotal(sub, 'site overhead'),
-                getExpTotal(sub, 'central site variable'),
-                getExpTotal(sub, 'central common overhead')
-              )
-            }
-          } else {
-            // Leaf row: single item, use row.project as label
-            addPlRow(row.project,
-              items.reduce((s, i) => s + (i.grandCredit || 0), 0),
-              getExpTotal(etPairs, 'site salary direct'),
-              getExpTotal(etPairs, 'site overhead'),
-              getExpTotal(etPairs, 'central site variable'),
-              getExpTotal(etPairs, 'central common overhead')
-            )
-          }
-        }
-
-        if (dataFirst !== null) {
-          // Sub Total: simple range SUM over all data rows
-          const stRn = plWs.rowCount + 1
-          const stRow = plWs.addRow([
-            '', 'Sub Total',
-            { formula: `SUM(C${dataFirst}:C${dataLast})` },
-            { formula: `SUM(D${dataFirst}:D${dataLast})` },
-            { formula: `SUM(E${dataFirst}:E${dataLast})` },
-            { formula: `SUM(F${dataFirst}:F${dataLast})` },
-            { formula: `SUM(G${dataFirst}:G${dataLast})` },
-            { formula: `SUM(H${dataFirst}:H${dataLast})` },
-            { formula: `SUM(I${dataFirst}:I${dataLast})` },
-            { formula: `IF(C${stRn}>0,I${stRn}/C${stRn},0)` }
-          ])
-          stRow.eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
-          ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { stRow.getCell(c).numFmt = FMT })
-          stRow.getCell(C.ratio).numFmt = '0.00%'
-
-          plWs.addRow([])
-
-          // Fixed & Variable Overhead rows (from Establishment category)
-          const estCat2 = data.find(r => (r.category || '').toLowerCase().includes('establishment'))?.category
-          const fixedTotal = estCat2
-            ? data.filter(r => r.category === estCat2 && r.project.toLowerCase().includes('fixed'))
-                .reduce((s, r) => s + (allExpandData[r.project]?.items || []).reduce((ss, i) => ss + (i.grandDebit || 0), 0), 0)
-            : 0
-          const varTotal = estCat2
-            ? data.filter(r => r.category === estCat2 && r.project.toLowerCase().includes('variable'))
-                .reduce((s, r) => s + (allExpandData[r.project]?.items || []).reduce((ss, i) => ss + (i.grandDebit || 0), 0), 0)
-            : 0
-
-          const fixRn = plWs.rowCount + 1
-          const fixRow = plWs.addRow(['', 'Fixed Overhead', '', '', '', '', '', fixedTotal, '', ''])
-          fixRow.eachCell(c => applyStyle(c, { border: true }))
-          fixRow.getCell(C.totalOut).numFmt = FMT
-
-          const varRn = plWs.rowCount + 1
-          const varRow = plWs.addRow(['', 'Variable Overhead', '', '', '', '', '', varTotal, '', ''])
-          varRow.eachCell(c => applyStyle(c, { border: true }))
-          varRow.getCell(C.totalOut).numFmt = FMT
-
-          // Grand Total
-          const gtRn = plWs.rowCount + 1
-          const gtRow = plWs.addRow([
-            '', 'Grand Total',
-            { formula: `C${stRn}` },
-            { formula: `D${stRn}` },
-            { formula: `E${stRn}` },
-            { formula: `F${stRn}` },
-            { formula: `G${stRn}` },
-            { formula: `H${stRn}+H${fixRn}+H${varRn}` },
-            { formula: `C${gtRn}-H${gtRn}` },
-            { formula: `IF(C${gtRn}>0,I${gtRn}/C${gtRn},0)` }
-          ])
-          gtRow.eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
-          ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { gtRow.getCell(c).numFmt = FMT })
-          gtRow.getCell(C.ratio).numFmt = '0.00%'
-        }
-      }
-      // ── End P&L Summary Sheet ─────────────────────────────────────────────────
-
       // ── Overhead Sheet (Establishment category, fully dynamic) ────────────────
+      // Written before P&L Summary so section row numbers are known for cross-sheet refs
+      let ovhFixedRn = null  // row number of "Total Fixed Overhead" in Overhead sheet
+      let ovhVarRn   = null  // row number of "Total Variable Cost"  in Overhead sheet
       const estCatName = data.find(r => (r.category || '').toLowerCase().includes('establishment'))?.category
       if (!estCatName) {
         wb.removeWorksheet(ovhWs.id)
@@ -569,14 +441,14 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
           const sectionTotalRows = [] // row numbers of each section's total row (for Grand Total)
 
           const writeOvhSection = (sectionLabel, sectionEstRows) => {
-            if (sectionEstRows.length === 0) return
+            if (sectionEstRows.length === 0) return null
             const allItems = []
             for (const estRow of sectionEstRows) {
               const items = (allExpandData[estRow.project]?.items || [])
                 .filter(i => i.grandDebit > 0 || i.grandCredit > 0)
               allItems.push(...items)
             }
-            if (allItems.length === 0) return
+            if (allItems.length === 0) return null
 
             // Section header
             ws.addRow([sectionLabel, ...months.map(() => ''), ''])
@@ -621,8 +493,9 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
             }
 
             // Section total — sums child CC subtotal rows (no double-counting)
+            let secRn = null
             if (ccSubtotalRows.length > 0) {
-              const secRn  = ws.rowCount + 1
+              secRn = ws.rowCount + 1
               const secRow = ws.addRow([
                 `Total ${sectionLabel}`,
                 ...months.map((_, i) => ({ formula: ccSubtotalRows.map(r => `${col(i)}${r}`).join('+') })),
@@ -635,10 +508,11 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
             }
 
             ws.addRow([])
+            return secRn
           }
 
-          writeOvhSection('Fixed Overhead', fixedRows)
-          writeOvhSection('Variable Cost',  variableRows)
+          ovhFixedRn = writeOvhSection('Fixed Overhead', fixedRows)
+          ovhVarRn   = writeOvhSection('Variable Cost',  variableRows)
           if (otherRows.length > 0) writeOvhSection('Other', otherRows)
 
           // Grand Total — sum of all section total rows
@@ -659,6 +533,210 @@ export default function ProjectCashFlow({ data, queryParams = '' }) {
         }
       }
       // ── End Overhead Sheet ────────────────────────────────────────────────────
+
+      // ── P&L Summary Sheet ──────────────────────────────────────────────────────
+      {
+        const C = { sr:1, proj:2, totalIn:3, ssd:4, so:5, csv:6, cco:7, totalOut:8, pl:9, ratio:10 }
+        plWs.getColumn(C.sr).width      = 6
+        plWs.getColumn(C.proj).width    = 32
+        ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { plWs.getColumn(c).width = 18 })
+        plWs.getColumn(C.ratio).width   = 10
+        plWs.views = [{ state: 'frozen', xSplit: 0, ySplit: 2 }]
+
+        const fyTitle = (from && to)
+          ? `${MN[parseInt(from.substring(4,6))-1]} ${from.substring(0,4)} – ${MN[parseInt(to.substring(4,6))-1]} ${to.substring(0,4)}`
+          : ''
+
+        // Title row
+        const tRow = plWs.addRow([`Project P&L Summary  |  ${fyTitle}`, ...Array(9).fill('')])
+        plWs.mergeCells('A1:J1')
+        applyStyle(tRow.getCell(1), { bold: true, border: true })
+
+        // Column header row
+        const hRow = plWs.addRow(['Sr', 'Project', 'Total In', 'Site Salary Direct', 'Site Overhead', 'Central Site Variable', 'Central Common Overhead', 'Total Out', 'P & L', 'Ratio'])
+        hRow.eachCell(c => applyStyle(c, { bold: true, border: true }))
+
+        // Helper: sum expense type amounts from expTypePairs
+        const getExpTotal = (expTypePairs, etKey) => {
+          let t = 0
+          for (const etMap of Object.values(expTypePairs || {})) {
+            for (const amt of Object.values(etMap[etKey] || {})) t += amt
+          }
+          return t
+        }
+
+        // Build a cross-sheet formula referencing the Total column of a specific row in another sheet
+        const makeSheetRef = (sn, rn) =>
+          ({ formula: `'${sn.replace(/'/g, "''")}'!${totalColLtr}${rn}` })
+
+        const projRows = data.filter(r => r.category === projectsCategoryName)
+        let sr = 1, dataFirst = null, dataLast = null
+
+        // Write one flat P&L row; tracks dataFirst/dataLast for Sub Total range SUM
+        const addPlRow = (label, totalIn, ssd, so, csv, cco) => {
+          const isBlank = v => (typeof v !== 'object') && !v
+          if (isBlank(totalIn) && isBlank(ssd) && isBlank(so) && isBlank(csv) && isBlank(cco)) return
+          const rn = plWs.rowCount + 1
+          const pRow = plWs.addRow([
+            sr++, label, totalIn, ssd, so, csv, cco,
+            { formula: `SUM(D${rn}:G${rn})` },
+            { formula: `C${rn}-H${rn}` },
+            { formula: `IF(C${rn}>0,I${rn}/C${rn},0)` }
+          ])
+          pRow.eachCell(c => applyStyle(c, { border: true }))
+          pRow.getCell(C.sr).numFmt = '0'
+          ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { pRow.getCell(c).numFmt = FMT })
+          pRow.getCell(C.ratio).numFmt = '0.00%'
+          if (dataFirst === null) dataFirst = rn
+          dataLast = rn
+        }
+
+        for (const row of projRows) {
+          const items   = allExpandData[row.project]?.items || []
+          const etPairs = allExpandData[row.project]?.expTypePairs || {}
+          // Parent CC: has items with names OTHER than itself (e.g. Pmc has items Pmc+CSI+HVT)
+          const isParent = items.length > 0 && items.some(i => i.name !== row.project)
+
+          if (isParent) {
+            // One row per item — first the self-named item (parent's own direct data),
+            // then each sub-CC item (CSI PROJECT, HVT PROJECT, HLE, …)
+            // Sub Total sums ALL of these; total = same as the old single-row aggregate
+            for (const item of items) {
+              const sn   = itemNameToSheet[item.name]
+              const refs = sn ? sheetItemRefs[sn] : null
+              if (refs) {
+                addPlRow(item.name,
+                  makeSheetRef(sn, refs.feeRn),
+                  makeSheetRef(sn, refs.ssdRn),
+                  makeSheetRef(sn, refs.soRn),
+                  makeSheetRef(sn, refs.csvRn),
+                  makeSheetRef(sn, refs.ccoRn)
+                )
+              } else {
+                const sub = etPairs[item.name] ? { [item.name]: etPairs[item.name] } : {}
+                addPlRow(item.name,
+                  item.grandCredit || 0,
+                  getExpTotal(sub, 'site salary direct'),
+                  getExpTotal(sub, 'site overhead'),
+                  getExpTotal(sub, 'central site variable'),
+                  getExpTotal(sub, 'central common overhead')
+                )
+              }
+            }
+          } else {
+            // Leaf row: single item, use row.project as label
+            const sn   = itemNameToSheet[row.project]
+            const refs = sn ? sheetItemRefs[sn] : null
+            if (refs) {
+              addPlRow(row.project,
+                makeSheetRef(sn, refs.feeRn),
+                makeSheetRef(sn, refs.ssdRn),
+                makeSheetRef(sn, refs.soRn),
+                makeSheetRef(sn, refs.csvRn),
+                makeSheetRef(sn, refs.ccoRn)
+              )
+            } else {
+              addPlRow(row.project,
+                items.reduce((s, i) => s + (i.grandCredit || 0), 0),
+                getExpTotal(etPairs, 'site salary direct'),
+                getExpTotal(etPairs, 'site overhead'),
+                getExpTotal(etPairs, 'central site variable'),
+                getExpTotal(etPairs, 'central common overhead')
+              )
+            }
+          }
+        }
+
+        if (dataFirst !== null) {
+          // Sub Total: simple range SUM over all data rows
+          const stRn = plWs.rowCount + 1
+          const stRow = plWs.addRow([
+            '', 'Sub Total',
+            { formula: `SUM(C${dataFirst}:C${dataLast})` },
+            { formula: `SUM(D${dataFirst}:D${dataLast})` },
+            { formula: `SUM(E${dataFirst}:E${dataLast})` },
+            { formula: `SUM(F${dataFirst}:F${dataLast})` },
+            { formula: `SUM(G${dataFirst}:G${dataLast})` },
+            { formula: `SUM(H${dataFirst}:H${dataLast})` },
+            { formula: `SUM(I${dataFirst}:I${dataLast})` },
+            { formula: `IF(C${stRn}>0,I${stRn}/C${stRn},0)` }
+          ])
+          stRow.eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+          ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { stRow.getCell(c).numFmt = FMT })
+          stRow.getCell(C.ratio).numFmt = '0.00%'
+
+          plWs.addRow([])
+
+          // Fixed & Variable Overhead — reference section total rows in the Overhead sheet
+          const fixRn  = plWs.rowCount + 1
+          const fixRow = plWs.addRow(['', 'Fixed Overhead', '', '', '', '', '',
+            ovhFixedRn ? { formula: `'Overhead'!${totalColLtr}${ovhFixedRn}` } : 0, '', ''])
+          fixRow.eachCell(c => applyStyle(c, { border: true }))
+          fixRow.getCell(C.totalOut).numFmt = FMT
+
+          const varRn  = plWs.rowCount + 1
+          const varRow = plWs.addRow(['', 'Variable Overhead', '', '', '', '', '',
+            ovhVarRn ? { formula: `'Overhead'!${totalColLtr}${ovhVarRn}` } : 0, '', ''])
+          varRow.eachCell(c => applyStyle(c, { border: true }))
+          varRow.getCell(C.totalOut).numFmt = FMT
+
+          // Grand Total
+          const gtRn = plWs.rowCount + 1
+          const gtRow = plWs.addRow([
+            '', 'Grand Total',
+            { formula: `C${stRn}` },
+            { formula: `D${stRn}` },
+            { formula: `E${stRn}` },
+            { formula: `F${stRn}` },
+            { formula: `G${stRn}` },
+            { formula: `H${stRn}+H${fixRn}+H${varRn}` },
+            { formula: `C${gtRn}-H${gtRn}` },
+            { formula: `IF(C${gtRn}>0,I${gtRn}/C${gtRn},0)` }
+          ])
+          gtRow.eachCell(c => applyStyle(c, { bold: true, border: 'medium' }))
+          ;[C.totalIn,C.ssd,C.so,C.csv,C.cco,C.totalOut,C.pl].forEach(c => { gtRow.getCell(c).numFmt = FMT })
+          gtRow.getCell(C.ratio).numFmt = '0.00%'
+
+          // ── Summary Box ──────────────────────────────────────────────────────
+          plWs.addRow([])
+          plWs.addRow([])
+
+          const BOX_BG = 'BDD7EE'
+          const boxStyle = (cell, opts = {}) => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + BOX_BG } }
+            cell.font = { name: 'Calibri', size: 12, bold: !!opts.bold }
+            const s = { style: opts.thick ? 'medium' : 'thin' }
+            cell.border = { top: s, left: s, bottom: s, right: s }
+            if (opts.fmt) cell.numFmt = opts.fmt
+          }
+
+          const sumTitle = (from && to)
+            ? `${from.substring(6,8)}.${from.substring(4,6)}.${from.substring(0,4)} to ${to.substring(6,8)}.${to.substring(4,6)}.${to.substring(0,4)} - ${months.length} months`
+            : 'Summary'
+
+          // Header row — merged B:D
+          const boxHdrRn = plWs.rowCount + 1
+          const boxHdrRow = plWs.addRow(['', sumTitle, '', ''])
+          ;[2, 3, 4].forEach(ci => boxStyle(boxHdrRow.getCell(ci), { bold: true, thick: true }))
+          plWs.mergeCells(`B${boxHdrRn}:D${boxHdrRn}`)
+          boxHdrRow.getCell(2).alignment = { horizontal: 'center' }
+
+          // Data rows: label (B), amount (C), % (D)
+          const addSumRow = (label, amtRef, pctRef) => {
+            const r = plWs.addRow(['', label, { formula: amtRef }, pctRef ? { formula: pctRef } : ''])
+            boxStyle(r.getCell(2))
+            boxStyle(r.getCell(3), { fmt: FMT })
+            boxStyle(r.getCell(4), { fmt: pctRef ? '0.00%' : undefined })
+          }
+
+          addSumRow('Total In',                `C${gtRn}`, null)
+          addSumRow('Total Out - Salaries',     `H${stRn}`, `IF(C${gtRn}>0,H${stRn}/C${gtRn},0)`)
+          addSumRow('Total Fixed overheads',    `H${fixRn}`, `IF(C${gtRn}>0,H${fixRn}/C${gtRn},0)`)
+          addSumRow('Total Variable Overheads', `H${varRn}`, `IF(C${gtRn}>0,H${varRn}/C${gtRn},0)`)
+          addSumRow('P&L',                      `I${gtRn}`,  `IF(C${gtRn}>0,I${gtRn}/C${gtRn},0)`)
+        }
+      }
+      // ── End P&L Summary Sheet ─────────────────────────────────────────────────
 
       const buffer = await wb.xlsx.writeBuffer()
       const blob   = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
